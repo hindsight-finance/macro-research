@@ -26,3 +26,13 @@ Quantify portion of total macro range formed by 3:50 PM candle.
 Measure 3:59 PM candle’s share of range and classify its behavior (expansion, retrace, or both).
 
 Analyze conditional on macro direction (bullish/bearish).
+
+## 24-11
+Idea:
+If stage 1 of macro stays internal to the 3:50 candle range, what happens?
+
+How often does price break out of the 3:15-3:45 range?
+Does a displacement 5m candle @ 3:45 have directional implications to macro?
+
+How often do 1m fvgs created in macro get respected? hypothesis is fvgs created in high volatility conditions would hold?
+If a fvg is created in 1st stage, probability of getting respected in 2nd stage?
