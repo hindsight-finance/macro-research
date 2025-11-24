@@ -38,3 +38,5 @@ How often do 1m fvgs created in macro get respected? hypothesis is fvgs created 
 If a fvg is created in 1st stage, probability of getting respected in 2nd stage?
 
 How often are both sides of injection candles taken? eg. 3:50, 3:55? Directional context matters, if its a reversal context then both sides of 3:50 will get taken, choppy probably both. I hypothesize in expansion conditions its an ITL
+
+I wonder how contract expiry / rollover would affect macro? would the expiring contract have increased volatility? 
