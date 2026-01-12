@@ -40,3 +40,8 @@ If a fvg is created in 1st stage, probability of getting respected in 2nd stage?
 How often are both sides of injection candles taken? eg. 3:50, 3:55? Directional context matters, if its a reversal context then both sides of 3:50 will get taken, choppy probably both. I hypothesize in expansion conditions its an ITL
 
 I wonder how contract expiry / rollover would affect macro? would the expiring contract have increased volatility? 
+
+## 12-01
+Want to test the initial 5m candle, and identify possible continuations from that? Eg. if the 5m candle is bearish, will the next 5m candle be bearish? can we sequence this as a markov chain over the last 3 candles?
+
+Also want to see where we are from 3pm. If 3pm is hard bullish, will macro be hard bullish?
