@@ -45,3 +45,6 @@ I wonder how contract expiry / rollover would affect macro? would the expiring c
 Want to test the initial 5m candle, and identify possible continuations from that? Eg. if the 5m candle is bearish, will the next 5m candle be bearish? can we sequence this as a markov chain over the last 3 candles?
 
 Also want to see where we are from 3pm. If 3pm is hard bullish, will macro be hard bullish?
+
+## 05-03
+Want to analyse volume delta. :59 candle tends to unwind opposite of total volume delta prior to macro
