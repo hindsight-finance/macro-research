@@ -1,6 +1,10 @@
 import pandas as pd
 
-from features.macro_fvg_study import detect_macro_fvgs, scan_fvg_outcomes_until_1559_close
+from features.macro_fvg_study import (
+    build_stage_summary_tables,
+    detect_macro_fvgs,
+    scan_fvg_outcomes_until_1559_close,
+)
 
 
 def make_bars(rows):
@@ -230,3 +234,132 @@ def test_marks_unconfirmable_late_fvg():
     assert not event["is_confirmable_by_1559"]
     assert pd.isna(event["first_retrace_at"])
     assert pd.isna(event["first_invalidation_at"])
+
+
+def test_builds_stage_and_transition_summary_rates():
+    events = pd.DataFrame(
+        [
+            {
+                "fvg_side": "bullish",
+                "assigned_stage": "stage_1",
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "invalidated_by_1559": False,
+                "held_to_1559_close": True,
+                "untouched_to_1559_close": False,
+                "retraced_in_stage_2": True,
+                "invalidated_in_stage_2": False,
+                "held_through_stage_2": True,
+                "untouched_through_stage_2": False,
+            },
+            {
+                "fvg_side": "bearish",
+                "assigned_stage": "stage_1",
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": False,
+                "invalidated_by_1559": True,
+                "held_to_1559_close": False,
+                "untouched_to_1559_close": True,
+                "retraced_in_stage_2": False,
+                "invalidated_in_stage_2": True,
+                "held_through_stage_2": False,
+                "untouched_through_stage_2": True,
+            },
+            {
+                "fvg_side": "bullish",
+                "assigned_stage": "stage_2",
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": False,
+                "invalidated_by_1559": False,
+                "held_to_1559_close": True,
+                "untouched_to_1559_close": True,
+                "retraced_in_stage_2": False,
+                "invalidated_in_stage_2": False,
+                "held_through_stage_2": True,
+                "untouched_through_stage_2": True,
+            },
+        ]
+    )
+
+    summary = build_stage_summary_tables(events)
+
+    assert set(summary["summary_scope"]) == {"stage_1", "stage_2", "stage_1_to_stage_2"}
+
+    stage_1_bull = summary[
+        (summary["summary_scope"] == "stage_1") & (summary["fvg_side"] == "bullish")
+    ].iloc[0]
+    assert stage_1_bull["n_total"] == 1
+    assert stage_1_bull["n_confirmable"] == 1
+    assert stage_1_bull["hold_rate"] == 1.0
+    assert stage_1_bull["retrace_rate"] == 1.0
+
+    transition_bear = summary[
+        (summary["summary_scope"] == "stage_1_to_stage_2")
+        & (summary["fvg_side"] == "bearish")
+    ].iloc[0]
+    assert transition_bear["invalidation_rate"] == 1.0
+    assert transition_bear["untouched_rate"] == 1.0
+
+
+def test_tracks_stage_1_outcomes_during_stage_2_window():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "window": "H3PM",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 95.0,
+                "High": 96.5,
+                "Low": 95.0,
+                "Close": 96.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:55:00",
+                "Open": 96.0,
+                "High": 98.0,
+                "Low": 96.0,
+                "Close": 97.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 97.5,
+                "High": 98.0,
+                "Low": 97.0,
+                "Close": 97.2,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["retraced_in_stage_2"]
+    assert not event["invalidated_in_stage_2"]
+    assert event["held_through_stage_2"]
+    assert not event["untouched_through_stage_2"]

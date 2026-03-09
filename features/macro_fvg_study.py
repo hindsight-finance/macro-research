@@ -112,22 +112,35 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
                     "invalidated_by_1559": False,
                     "held_to_1559_close": False,
                     "untouched_to_1559_close": False,
+                    "retraced_in_stage_2": False,
+                    "invalidated_in_stage_2": False,
+                    "held_through_stage_2": False,
+                    "untouched_through_stage_2": False,
                     "last_observed_at": pd.NaT,
                 }
             )
             scanned_rows.append(event_dict)
             continue
 
-        scan_end = pd.Timestamp(event_dict["assigned_at"]).normalize() + pd.Timedelta(
+        session_date = pd.Timestamp(event_dict["assigned_at"]).normalize()
+        scan_end = session_date + pd.Timedelta(
             hours=15, minutes=59
         )
+        stage_2_start = session_date + pd.Timedelta(hours=15, minutes=55)
         scan_df = work_bars[
             (work_bars["DateTime_ET"] >= event_dict["confirmed_at"])
+            & (work_bars["DateTime_ET"] <= scan_end)
+        ]
+        stage_2_scan_start = max(pd.Timestamp(event_dict["confirmed_at"]), stage_2_start)
+        stage_2_scan_df = work_bars[
+            (work_bars["DateTime_ET"] >= stage_2_scan_start)
             & (work_bars["DateTime_ET"] <= scan_end)
         ]
 
         first_retrace_at = pd.NaT
         first_invalidation_at = pd.NaT
+        first_stage_2_retrace_at = pd.NaT
+        first_stage_2_invalidation_at = pd.NaT
 
         for _, bar in scan_df.iterrows():
             if pd.isna(first_retrace_at) and _bar_retraces_gap(
@@ -146,6 +159,23 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
             if pd.notna(first_retrace_at) and pd.notna(first_invalidation_at):
                 break
 
+        for _, bar in stage_2_scan_df.iterrows():
+            if pd.isna(first_stage_2_retrace_at) and _bar_retraces_gap(
+                bar, event_dict["gap_bottom"], event_dict["gap_top"]
+            ):
+                first_stage_2_retrace_at = bar["DateTime_ET"]
+
+            if pd.isna(first_stage_2_invalidation_at) and _bar_invalidates_gap(
+                bar,
+                event_dict["fvg_side"],
+                event_dict["gap_bottom"],
+                event_dict["gap_top"],
+            ):
+                first_stage_2_invalidation_at = bar["DateTime_ET"]
+
+            if pd.notna(first_stage_2_retrace_at) and pd.notna(first_stage_2_invalidation_at):
+                break
+
         event_dict.update(
             {
                 "first_retrace_at": first_retrace_at,
@@ -154,9 +184,101 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
                 "invalidated_by_1559": bool(pd.notna(first_invalidation_at)),
                 "held_to_1559_close": bool(pd.isna(first_invalidation_at)),
                 "untouched_to_1559_close": bool(pd.isna(first_retrace_at)),
+                "retraced_in_stage_2": bool(pd.notna(first_stage_2_retrace_at)),
+                "invalidated_in_stage_2": bool(pd.notna(first_stage_2_invalidation_at)),
+                "held_through_stage_2": bool(pd.isna(first_stage_2_invalidation_at)),
+                "untouched_through_stage_2": bool(pd.isna(first_stage_2_retrace_at)),
                 "last_observed_at": scan_end,
             }
         )
         scanned_rows.append(event_dict)
 
     return pd.DataFrame(scanned_rows)
+
+
+def _build_scope_summary(
+    events: pd.DataFrame,
+    scope_name: str,
+    retrace_col: str,
+    invalidate_col: str,
+    held_col: str,
+    untouched_col: str,
+) -> pd.DataFrame:
+    if events.empty:
+        return pd.DataFrame(
+            columns=[
+                "summary_scope",
+                "fvg_side",
+                "n_total",
+                "n_confirmable",
+                "hold_rate",
+                "retrace_rate",
+                "untouched_rate",
+                "invalidation_rate",
+            ]
+        )
+
+    rows = []
+    for fvg_side, group in events.groupby("fvg_side"):
+        n_total = len(group)
+        n_confirmable = int(group["is_confirmable_by_1559"].sum())
+        if n_confirmable == 0:
+            hold_rate = float("nan")
+            retrace_rate = float("nan")
+            untouched_rate = float("nan")
+            invalidation_rate = float("nan")
+        else:
+            hold_rate = float(group[held_col].sum() / n_confirmable)
+            retrace_rate = float(group[retrace_col].sum() / n_confirmable)
+            untouched_rate = float(group[untouched_col].sum() / n_confirmable)
+            invalidation_rate = float(group[invalidate_col].sum() / n_confirmable)
+
+        rows.append(
+            {
+                "summary_scope": scope_name,
+                "fvg_side": fvg_side,
+                "n_total": int(n_total),
+                "n_confirmable": n_confirmable,
+                "hold_rate": hold_rate,
+                "retrace_rate": retrace_rate,
+                "untouched_rate": untouched_rate,
+                "invalidation_rate": invalidation_rate,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
+    stage_1 = events[events["assigned_stage"] == "stage_1"]
+    stage_2 = events[events["assigned_stage"] == "stage_2"]
+
+    return pd.concat(
+        [
+            _build_scope_summary(
+                stage_1,
+                "stage_1",
+                "retraced_by_1559",
+                "invalidated_by_1559",
+                "held_to_1559_close",
+                "untouched_to_1559_close",
+            ),
+            _build_scope_summary(
+                stage_2,
+                "stage_2",
+                "retraced_by_1559",
+                "invalidated_by_1559",
+                "held_to_1559_close",
+                "untouched_to_1559_close",
+            ),
+            _build_scope_summary(
+                stage_1,
+                "stage_1_to_stage_2",
+                "retraced_in_stage_2",
+                "invalidated_in_stage_2",
+                "held_through_stage_2",
+                "untouched_through_stage_2",
+            ),
+        ],
+        ignore_index=True,
+    )
