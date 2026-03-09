@@ -23,6 +23,8 @@ ALIGNMENT_BUCKET_ORDER = [
     "1_aligned_2_opposite",
     "contains_neutral",
 ]
+MINUTE_BLOCK_ORDER = ["15:50-15:52", "15:53-15:57", "15:58_unconfirmable"]
+GAP_SIZE_BUCKET_ORDER = ["<2.25", ">=2.25"]
 SUMMARY_COLUMNS = [
     "summary_scope",
     "fvg_side",
@@ -704,6 +706,151 @@ def plot_creation_minute_volume_heatmap(events: pd.DataFrame, figures_dir: Path)
     plt.close(fig)
 
 
+def plot_alignment_bucket_outcomes(summary: pd.DataFrame, figures_dir: Path) -> None:
+    alignment_summary = summary[summary["summary_scope"] == "alignment_bucket"].copy()
+    if alignment_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "alignment_bucket_outcomes.png",
+            "Alignment Bucket Outcomes",
+        )
+        return
+
+    alignment_summary["alignment_bucket"] = pd.Categorical(
+        alignment_summary["alignment_bucket"],
+        categories=ALIGNMENT_BUCKET_ORDER,
+        ordered=True,
+    )
+    plot_frame = (
+        alignment_summary.sort_values("alignment_bucket")
+        .dropna(subset=["alignment_bucket"])
+        .set_index("alignment_bucket")[["hold_rate", "retrace_rate", "invalidation_rate"]]
+    )
+    if plot_frame.empty:
+        _save_placeholder_figure(
+            figures_dir / "alignment_bucket_outcomes.png",
+            "Alignment Bucket Outcomes",
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#31a354", "#fd8d3c", "#de2d26"])
+    ax.set_title("Alignment Bucket Outcomes")
+    ax.set_xlabel("Alignment Bucket")
+    ax.set_ylabel("Rate")
+    ax.set_ylim(0, 1)
+    ax.tick_params(axis="x", rotation=20)
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "alignment_bucket_outcomes.png")
+    plt.close(fig)
+
+
+def plot_alignment_bucket_by_minute_block(summary: pd.DataFrame, figures_dir: Path) -> None:
+    minute_summary = summary[summary["summary_scope"] == "alignment_bucket_minute_block"].copy()
+    if minute_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "alignment_bucket_by_minute_block.png",
+            "Alignment Bucket by Minute Block",
+        )
+        return
+
+    minute_summary["alignment_bucket"] = pd.Categorical(
+        minute_summary["alignment_bucket"],
+        categories=ALIGNMENT_BUCKET_ORDER,
+        ordered=True,
+    )
+    plot_frame = (
+        minute_summary.pivot(
+            index="alignment_bucket",
+            columns="minute_block",
+            values="hold_rate",
+        )
+        .reindex(index=ALIGNMENT_BUCKET_ORDER, columns=MINUTE_BLOCK_ORDER)
+        .dropna(how="all")
+    )
+    if plot_frame.empty:
+        _save_placeholder_figure(
+            figures_dir / "alignment_bucket_by_minute_block.png",
+            "Alignment Bucket by Minute Block",
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#3182bd", "#6baed6", "#9ecae1"])
+    ax.set_title("Alignment Hold Rate by Minute Block")
+    ax.set_xlabel("Alignment Bucket")
+    ax.set_ylabel("Hold Rate")
+    ax.set_ylim(0, 1)
+    ax.tick_params(axis="x", rotation=20)
+    ax.legend(title="Minute Block", loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "alignment_bucket_by_minute_block.png")
+    plt.close(fig)
+
+
+def plot_alignment_bucket_by_gap_bucket(summary: pd.DataFrame, figures_dir: Path) -> None:
+    gap_summary = summary[summary["summary_scope"] == "alignment_bucket_gap_bucket"].copy()
+    if gap_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "alignment_bucket_by_gap_bucket.png",
+            "Alignment Bucket by Gap Bucket",
+        )
+        return
+
+    gap_summary["alignment_bucket"] = pd.Categorical(
+        gap_summary["alignment_bucket"],
+        categories=ALIGNMENT_BUCKET_ORDER,
+        ordered=True,
+    )
+    plot_frame = (
+        gap_summary.pivot(
+            index="alignment_bucket",
+            columns="gap_size_bucket_225",
+            values="hold_rate",
+        )
+        .reindex(index=ALIGNMENT_BUCKET_ORDER, columns=GAP_SIZE_BUCKET_ORDER)
+        .dropna(how="all")
+    )
+    if plot_frame.empty:
+        _save_placeholder_figure(
+            figures_dir / "alignment_bucket_by_gap_bucket.png",
+            "Alignment Bucket by Gap Bucket",
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#756bb1", "#bcbddc"])
+    ax.set_title("Alignment Hold Rate by Gap Bucket")
+    ax.set_xlabel("Alignment Bucket")
+    ax.set_ylabel("Hold Rate")
+    ax.set_ylim(0, 1)
+    ax.tick_params(axis="x", rotation=20)
+    ax.legend(title="Gap Bucket", loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "alignment_bucket_by_gap_bucket.png")
+    plt.close(fig)
+
+
+def plot_alignment_bucket_counts(events: pd.DataFrame, figures_dir: Path) -> None:
+    if events.empty:
+        _save_placeholder_figure(
+            figures_dir / "alignment_bucket_counts.png",
+            "Alignment Bucket Counts",
+        )
+        return
+
+    count_frame = events["alignment_bucket"].value_counts().reindex(ALIGNMENT_BUCKET_ORDER, fill_value=0)
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.bar(count_frame.index, count_frame.values, color="#636363")
+    ax.set_title("Alignment Bucket Counts")
+    ax.set_xlabel("Alignment Bucket")
+    ax.set_ylabel("Count")
+    ax.tick_params(axis="x", rotation=20)
+    fig.tight_layout()
+    fig.savefig(figures_dir / "alignment_bucket_counts.png")
+    plt.close(fig)
+
+
 def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figures_dir: Path) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -717,6 +864,10 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
             ("bar2_volume_bucket_outcomes.png", "Bar-2 Volume Bucket Outcomes"),
             ("creation_minute_avg_bar2_volume.png", "Creation Minute Average Bar-2 Volume"),
             ("creation_minute_volume_heatmap.png", "Creation Minute Volume Heatmap"),
+            ("alignment_bucket_outcomes.png", "Alignment Bucket Outcomes"),
+            ("alignment_bucket_by_minute_block.png", "Alignment Bucket by Minute Block"),
+            ("alignment_bucket_by_gap_bucket.png", "Alignment Bucket by Gap Bucket"),
+            ("alignment_bucket_counts.png", "Alignment Bucket Counts"),
         ]:
             _save_placeholder_figure(figures_dir / filename, title)
         return
@@ -841,6 +992,10 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
     plot_bar2_volume_bucket_outcomes(events, figures_dir)
     plot_creation_minute_avg_bar2_volume(events, figures_dir)
     plot_creation_minute_volume_heatmap(events, figures_dir)
+    plot_alignment_bucket_outcomes(summary, figures_dir)
+    plot_alignment_bucket_by_minute_block(summary, figures_dir)
+    plot_alignment_bucket_by_gap_bucket(summary, figures_dir)
+    plot_alignment_bucket_counts(events, figures_dir)
 
 
 def run_macro_fvg_study(

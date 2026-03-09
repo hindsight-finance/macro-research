@@ -967,3 +967,7 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     assert (figures_dir / "bar2_volume_bucket_outcomes.png").exists()
     assert (figures_dir / "creation_minute_avg_bar2_volume.png").exists()
     assert (figures_dir / "creation_minute_volume_heatmap.png").exists()
+    assert (figures_dir / "alignment_bucket_outcomes.png").exists()
+    assert (figures_dir / "alignment_bucket_by_minute_block.png").exists()
+    assert (figures_dir / "alignment_bucket_by_gap_bucket.png").exists()
+    assert (figures_dir / "alignment_bucket_counts.png").exists()
