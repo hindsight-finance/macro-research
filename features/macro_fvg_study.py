@@ -83,6 +83,38 @@ def assign_alignment_bucket(
     return aligned_count, opposite_count, neutral_count, bucket
 
 
+def assign_entry_price(event: pd.Series | dict) -> float:
+    if event["fvg_side"] == "bullish":
+        return float(event["bar3_high"])
+    return float(event["bar3_low"])
+
+
+def _bar_triggers_entry(bar: pd.Series, fvg_side: str, entry_price: float) -> bool:
+    if fvg_side == "bullish":
+        return float(bar["High"]) >= entry_price
+    return float(bar["Low"]) <= entry_price
+
+
+def _calculate_excursions_from_entry(
+    scan_df: pd.DataFrame,
+    fvg_side: str,
+    entry_price: float,
+) -> tuple[float, float]:
+    if scan_df.empty:
+        return float("nan"), float("nan")
+
+    max_high = float(scan_df["High"].max())
+    min_low = float(scan_df["Low"].min())
+    if fvg_side == "bullish":
+        mfe_pct = (max_high - entry_price) / entry_price
+        mae_pct = (entry_price - min_low) / entry_price
+    else:
+        mfe_pct = (entry_price - min_low) / entry_price
+        mae_pct = (max_high - entry_price) / entry_price
+
+    return float(mfe_pct), float(mae_pct)
+
+
 def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     required = {"DateTime_ET", "Open", "High", "Low", "Close", "Volume", "window"}
     missing = required.difference(df.columns)
@@ -132,6 +164,8 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
                 "gap_top",
                 "gap_size",
                 "bar2_volume",
+                "bar3_high",
+                "bar3_low",
                 "is_confirmable_by_1559",
                 "bar1_direction",
                 "bar2_direction",
@@ -227,6 +261,8 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
             "gap_top",
             "gap_size",
             "bar2_volume",
+            "bar3_high",
+            "bar3_low",
             "is_confirmable_by_1559",
             "bar1_direction",
             "bar2_direction",
@@ -270,9 +306,17 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
     scanned_rows = []
     for _, event in events.iterrows():
         event_dict = event.to_dict()
+        entry_price = assign_entry_price(event_dict)
         if not event_dict["is_confirmable_by_1559"]:
             event_dict.update(
                 {
+                    "entry_price": entry_price,
+                    "entry_triggered_by_1559": False,
+                    "first_entry_trigger_at": pd.NaT,
+                    "entry_trigger_minute_hhmm": pd.NA,
+                    "entry_trigger_minute_index": pd.NA,
+                    "mfe_pct_to_1559": float("nan"),
+                    "mae_pct_to_1559": float("nan"),
                     "first_retrace_at": pd.NaT,
                     "first_invalidation_at": pd.NaT,
                     "retraced_by_1559": False,
@@ -294,6 +338,13 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
         if day_bars is None:
             event_dict.update(
                 {
+                    "entry_price": entry_price,
+                    "entry_triggered_by_1559": False,
+                    "first_entry_trigger_at": pd.NaT,
+                    "entry_trigger_minute_hhmm": pd.NA,
+                    "entry_trigger_minute_index": pd.NA,
+                    "mfe_pct_to_1559": float("nan"),
+                    "mae_pct_to_1559": float("nan"),
                     "first_retrace_at": pd.NaT,
                     "first_invalidation_at": pd.NaT,
                     "retraced_by_1559": False,
@@ -328,8 +379,16 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
         first_invalidation_at = pd.NaT
         first_stage_2_retrace_at = pd.NaT
         first_stage_2_invalidation_at = pd.NaT
+        first_entry_trigger_at = pd.NaT
 
         for _, bar in scan_df.iterrows():
+            if pd.isna(first_entry_trigger_at) and _bar_triggers_entry(
+                bar,
+                event_dict["fvg_side"],
+                entry_price,
+            ):
+                first_entry_trigger_at = bar["DateTime_ET"]
+
             if pd.isna(first_retrace_at) and _bar_retraces_gap(
                 bar, event_dict["gap_bottom"], event_dict["gap_top"]
             ):
@@ -363,8 +422,37 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
             if pd.notna(first_stage_2_retrace_at) and pd.notna(first_stage_2_invalidation_at):
                 break
 
+        if pd.isna(first_entry_trigger_at):
+            entry_trigger_minute_hhmm = pd.NA
+            entry_trigger_minute_index = pd.NA
+            mfe_pct_to_1559 = float("nan")
+            mae_pct_to_1559 = float("nan")
+        else:
+            entry_trigger_minute_hhmm = pd.Timestamp(first_entry_trigger_at).strftime("%H:%M")
+            entry_trigger_minute_index = (
+                pd.Timestamp(first_entry_trigger_at).hour * 60
+                + pd.Timestamp(first_entry_trigger_at).minute
+                - (15 * 60 + 50)
+            )
+            post_trigger_df = day_bars[
+                (day_bars["DateTime_ET"] > first_entry_trigger_at)
+                & (day_bars["DateTime_ET"] <= scan_end)
+            ]
+            mfe_pct_to_1559, mae_pct_to_1559 = _calculate_excursions_from_entry(
+                post_trigger_df,
+                event_dict["fvg_side"],
+                entry_price,
+            )
+
         event_dict.update(
             {
+                "entry_price": entry_price,
+                "entry_triggered_by_1559": bool(pd.notna(first_entry_trigger_at)),
+                "first_entry_trigger_at": first_entry_trigger_at,
+                "entry_trigger_minute_hhmm": entry_trigger_minute_hhmm,
+                "entry_trigger_minute_index": entry_trigger_minute_index,
+                "mfe_pct_to_1559": mfe_pct_to_1559,
+                "mae_pct_to_1559": mae_pct_to_1559,
                 "first_retrace_at": first_retrace_at,
                 "first_invalidation_at": first_invalidation_at,
                 "retraced_by_1559": bool(pd.notna(first_retrace_at)),

@@ -1,5 +1,6 @@
 import features.macro_fvg_study as macro_fvg_study
 import pandas as pd
+import pytest
 
 from features.macro_fvg_study import (
     build_bar2_volume_summary,
@@ -541,6 +542,234 @@ def test_marks_unconfirmable_late_fvg():
     assert not event["is_confirmable_by_1559"]
     assert pd.isna(event["first_retrace_at"])
     assert pd.isna(event["first_invalidation_at"])
+
+
+def test_bullish_entry_trigger_and_excursions_use_bar3_high():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 100.5,
+                "High": 101.5,
+                "Low": 100.0,
+                "Close": 101.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:54:00",
+                "Open": 102.5,
+                "High": 104.0,
+                "Low": 103.0,
+                "Close": 103.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 103.5,
+                "High": 105.0,
+                "Low": 100.5,
+                "Close": 104.0,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["fvg_side"] == "bullish"
+    assert event["entry_price"] == 103.0
+    assert event["entry_triggered_by_1559"]
+    assert event["first_entry_trigger_at"] == pd.Timestamp("2025-01-02 15:54:00")
+    assert event["entry_trigger_minute_hhmm"] == "15:54"
+    assert event["entry_trigger_minute_index"] == 4
+    assert event["mfe_pct_to_1559"] == pytest.approx((105.0 - 103.0) / 103.0)
+    assert event["mae_pct_to_1559"] == pytest.approx((103.0 - 100.5) / 103.0)
+
+
+def test_bearish_entry_trigger_and_excursions_use_bar3_low():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:53:00",
+                "Open": 95.5,
+                "High": 95.5,
+                "Low": 93.5,
+                "Close": 94.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 94.0,
+                "High": 96.0,
+                "Low": 92.0,
+                "Close": 93.0,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["fvg_side"] == "bearish"
+    assert event["entry_price"] == 94.0
+    assert event["entry_triggered_by_1559"]
+    assert event["first_entry_trigger_at"] == pd.Timestamp("2025-01-02 15:53:00")
+    assert event["entry_trigger_minute_hhmm"] == "15:53"
+    assert event["entry_trigger_minute_index"] == 3
+    assert event["mfe_pct_to_1559"] == pytest.approx((94.0 - 92.0) / 94.0)
+    assert event["mae_pct_to_1559"] == pytest.approx((96.0 - 94.0) / 94.0)
+
+
+def test_entry_excursion_fields_stay_null_when_entry_never_triggers():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 100.5,
+                "High": 101.5,
+                "Low": 100.0,
+                "Close": 101.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:54:00",
+                "Open": 102.5,
+                "High": 102.8,
+                "Low": 101.8,
+                "Close": 102.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 102.0,
+                "High": 102.9,
+                "Low": 101.0,
+                "Close": 101.5,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert not event["entry_triggered_by_1559"]
+    assert pd.isna(event["first_entry_trigger_at"])
+    assert pd.isna(event["entry_trigger_minute_hhmm"])
+    assert pd.isna(event["entry_trigger_minute_index"])
+    assert pd.isna(event["mfe_pct_to_1559"])
+    assert pd.isna(event["mae_pct_to_1559"])
+
+
+def test_entry_trigger_on_1559_sets_trigger_without_excursions():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 100.5,
+                "High": 101.5,
+                "Low": 100.0,
+                "Close": 101.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 102.5,
+                "High": 103.2,
+                "Low": 102.0,
+                "Close": 103.0,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["entry_triggered_by_1559"]
+    assert event["first_entry_trigger_at"] == pd.Timestamp("2025-01-02 15:59:00")
+    assert event["entry_trigger_minute_hhmm"] == "15:59"
+    assert event["entry_trigger_minute_index"] == 9
+    assert pd.isna(event["mfe_pct_to_1559"])
+    assert pd.isna(event["mae_pct_to_1559"])
 
 
 def test_builds_stage_and_transition_summary_rates():
