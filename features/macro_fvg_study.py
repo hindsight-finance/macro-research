@@ -29,16 +29,21 @@ SUMMARY_COLUMNS = [
     "summary_scope",
     "fvg_side",
     "alignment_bucket",
+    "stacked_continuation_fvg",
     "minute_block",
     "gap_size_bucket_225",
     "n_total",
     "n_confirmable",
+    "n_retraced",
+    "n_successful",
     "n_triggered",
     "entry_trigger_rate",
     "hold_rate",
     "retrace_rate",
     "untouched_rate",
     "invalidation_rate",
+    "success_after_retrace_rate",
+    "successful_share_of_confirmable",
     "mfe_pct_mean",
     "mfe_pct_median",
     "mfe_pct_p75",
@@ -125,6 +130,26 @@ def _calculate_excursions_from_entry(
     return float(mfe_pct), float(mae_pct)
 
 
+def mark_stacked_continuation_fvgs(events: pd.DataFrame) -> pd.DataFrame:
+    work = events.copy()
+    work["stacked_continuation_fvg"] = False
+    work["stack_predecessor_assigned_at"] = pd.NaT
+    if work.empty:
+        return work
+
+    for idx in range(1, len(work)):
+        current = work.iloc[idx]
+        previous = work.iloc[idx - 1]
+        if (
+            current["date"] == previous["date"]
+            and current["fvg_side"] == previous["fvg_side"]
+            and current["assigned_at"] == previous["bar3_time"]
+        ):
+            work.at[work.index[idx], "stacked_continuation_fvg"] = True
+            work.at[work.index[idx], "stack_predecessor_assigned_at"] = previous["assigned_at"]
+    return work
+
+
 def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     required = {"DateTime_ET", "Open", "High", "Low", "Close", "Volume", "window"}
     missing = required.difference(df.columns)
@@ -186,6 +211,8 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
                 "alignment_bucket",
                 "minute_block",
                 "gap_size_bucket_225",
+                "stacked_continuation_fvg",
+                "stack_predecessor_assigned_at",
             ]
         )
 
@@ -257,6 +284,7 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
         index=event_rows.index,
         columns=["aligned_count", "opposite_count", "neutral_count", "alignment_bucket"],
     )
+    event_rows = mark_stacked_continuation_fvgs(event_rows)
 
     return event_rows[
         [
@@ -283,6 +311,8 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
             "alignment_bucket",
             "minute_block",
             "gap_size_bucket_225",
+            "stacked_continuation_fvg",
+            "stack_predecessor_assigned_at",
         ]
     ].reset_index(drop=True)
 
@@ -296,6 +326,18 @@ def _bar_invalidates_gap(bar: pd.Series, fvg_side: str, gap_bottom: float, gap_t
     if fvg_side == "bullish":
         return close < gap_bottom
     return close > gap_top
+
+
+def _success_reference_price(event: pd.Series | dict) -> float:
+    if event["fvg_side"] == "bullish":
+        return float(event["first_retrace_candle_high"])
+    return float(event["first_retrace_candle_low"])
+
+
+def _bar_breaks_retrace_reference(bar: pd.Series, fvg_side: str, reference_price: float) -> bool:
+    if fvg_side == "bullish":
+        return float(bar["High"]) > reference_price
+    return float(bar["Low"]) < reference_price
 
 
 def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame) -> pd.DataFrame:
@@ -328,6 +370,14 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
                     "mfe_pct_to_1559": float("nan"),
                     "mae_pct_to_1559": float("nan"),
                     "first_retrace_at": pd.NaT,
+                    "first_retrace_candle_at": pd.NaT,
+                    "first_retrace_candle_open": float("nan"),
+                    "first_retrace_candle_high": float("nan"),
+                    "first_retrace_candle_low": float("nan"),
+                    "first_retrace_candle_close": float("nan"),
+                    "success_reference_price": float("nan"),
+                    "successful_by_1559": False,
+                    "success_break_at": pd.NaT,
                     "first_invalidation_at": pd.NaT,
                     "retraced_by_1559": False,
                     "invalidated_by_1559": False,
@@ -356,6 +406,14 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
                     "mfe_pct_to_1559": float("nan"),
                     "mae_pct_to_1559": float("nan"),
                     "first_retrace_at": pd.NaT,
+                    "first_retrace_candle_at": pd.NaT,
+                    "first_retrace_candle_open": float("nan"),
+                    "first_retrace_candle_high": float("nan"),
+                    "first_retrace_candle_low": float("nan"),
+                    "first_retrace_candle_close": float("nan"),
+                    "success_reference_price": float("nan"),
+                    "successful_by_1559": False,
+                    "success_break_at": pd.NaT,
                     "first_invalidation_at": pd.NaT,
                     "retraced_by_1559": False,
                     "invalidated_by_1559": False,
@@ -386,6 +444,7 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
         ]
 
         first_retrace_at = pd.NaT
+        first_retrace_candle = None
         first_invalidation_at = pd.NaT
         first_stage_2_retrace_at = pd.NaT
         first_stage_2_invalidation_at = pd.NaT
@@ -403,6 +462,7 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
                 bar, event_dict["gap_bottom"], event_dict["gap_top"]
             ):
                 first_retrace_at = bar["DateTime_ET"]
+                first_retrace_candle = bar
 
             if pd.isna(first_invalidation_at) and _bar_invalidates_gap(
                 bar,
@@ -454,6 +514,33 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
                 entry_price,
             )
 
+        if first_retrace_candle is None:
+            success_reference_price = float("nan")
+            successful_by_1559 = False
+            success_break_at = pd.NaT
+        else:
+            success_reference_price = _success_reference_price(
+                {
+                    "fvg_side": event_dict["fvg_side"],
+                    "first_retrace_candle_high": first_retrace_candle["High"],
+                    "first_retrace_candle_low": first_retrace_candle["Low"],
+                }
+            )
+            success_break_at = pd.NaT
+            success_scan_df = day_bars[
+                (day_bars["DateTime_ET"] > first_retrace_at)
+                & (day_bars["DateTime_ET"] <= scan_end)
+            ]
+            for _, bar in success_scan_df.iterrows():
+                if _bar_breaks_retrace_reference(
+                    bar,
+                    event_dict["fvg_side"],
+                    success_reference_price,
+                ):
+                    success_break_at = bar["DateTime_ET"]
+                    break
+            successful_by_1559 = bool(pd.notna(success_break_at))
+
         event_dict.update(
             {
                 "entry_price": entry_price,
@@ -464,6 +551,30 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
                 "mfe_pct_to_1559": mfe_pct_to_1559,
                 "mae_pct_to_1559": mae_pct_to_1559,
                 "first_retrace_at": first_retrace_at,
+                "first_retrace_candle_at": first_retrace_at,
+                "first_retrace_candle_open": (
+                    float(first_retrace_candle["Open"])
+                    if first_retrace_candle is not None
+                    else float("nan")
+                ),
+                "first_retrace_candle_high": (
+                    float(first_retrace_candle["High"])
+                    if first_retrace_candle is not None
+                    else float("nan")
+                ),
+                "first_retrace_candle_low": (
+                    float(first_retrace_candle["Low"])
+                    if first_retrace_candle is not None
+                    else float("nan")
+                ),
+                "first_retrace_candle_close": (
+                    float(first_retrace_candle["Close"])
+                    if first_retrace_candle is not None
+                    else float("nan")
+                ),
+                "success_reference_price": success_reference_price,
+                "successful_by_1559": successful_by_1559,
+                "success_break_at": success_break_at,
                 "first_invalidation_at": first_invalidation_at,
                 "retraced_by_1559": bool(pd.notna(first_retrace_at)),
                 "invalidated_by_1559": bool(pd.notna(first_invalidation_at)),
@@ -622,6 +733,62 @@ def _group_entry_excursion_stats(
     return pd.DataFrame(rows).reindex(columns=SUMMARY_COLUMNS)
 
 
+def _group_success_context_stats(
+    events: pd.DataFrame,
+    group_cols: list[str],
+    scope_name: str,
+) -> pd.DataFrame:
+    if events.empty:
+        return _empty_summary_table()
+
+    grouped = [((None,), events)] if not group_cols else events.groupby(group_cols, dropna=False, sort=False)
+    rows = []
+    for group_key, group in grouped:
+        row = {}
+        if group_cols:
+            group_values = group_key if isinstance(group_key, tuple) else (group_key,)
+            row.update(dict(zip(group_cols, group_values)))
+
+        n_total = len(group)
+        n_confirmable = int(group["is_confirmable_by_1559"].fillna(False).sum())
+        n_retraced = int(group["retraced_by_1559"].fillna(False).sum())
+        n_successful = int(group["successful_by_1559"].fillna(False).sum())
+        successful = group[group["successful_by_1559"].fillna(False)]
+        mae = successful["mae_pct_to_1559"].dropna()
+
+        if n_confirmable == 0:
+            retrace_rate = float("nan")
+            successful_share_of_confirmable = float("nan")
+        else:
+            retrace_rate = float(n_retraced / n_confirmable)
+            successful_share_of_confirmable = float(n_successful / n_confirmable)
+
+        if n_retraced == 0:
+            success_after_retrace_rate = float("nan")
+        else:
+            success_after_retrace_rate = float(n_successful / n_retraced)
+
+        row.update(
+            {
+                "summary_scope": scope_name,
+                "fvg_side": np.nan,
+                "n_total": int(n_total),
+                "n_confirmable": n_confirmable,
+                "n_retraced": n_retraced,
+                "n_successful": n_successful,
+                "retrace_rate": retrace_rate,
+                "success_after_retrace_rate": success_after_retrace_rate,
+                "successful_share_of_confirmable": successful_share_of_confirmable,
+                "mae_pct_mean": float(mae.mean()) if not mae.empty else float("nan"),
+                "mae_pct_median": float(mae.median()) if not mae.empty else float("nan"),
+                "mae_pct_p75": _percentile_or_nan(mae, 0.75),
+            }
+        )
+        rows.append(row)
+
+    return pd.DataFrame(rows).reindex(columns=SUMMARY_COLUMNS)
+
+
 def build_creation_minute_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_outcome_rates(
         events,
@@ -714,6 +881,36 @@ def build_entry_excursion_alignment_bucket_minute_block_summary(
     )
 
 
+def build_success_context_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_success_context_stats(events, [], "success_context_overall")
+
+
+def build_success_context_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_success_context_stats(
+        events,
+        ["alignment_bucket"],
+        "success_context_alignment_bucket",
+    )
+
+
+def build_success_context_stacked_flag_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_success_context_stats(
+        events,
+        ["stacked_continuation_fvg"],
+        "success_context_stacked_flag",
+    )
+
+
+def build_success_context_alignment_bucket_stacked_flag_summary(
+    events: pd.DataFrame,
+) -> pd.DataFrame:
+    return _group_success_context_stats(
+        events,
+        ["alignment_bucket", "stacked_continuation_fvg"],
+        "success_context_alignment_bucket_stacked_flag",
+    )
+
+
 def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
     stage_1 = events[events["assigned_stage"] == "stage_1"]
     stage_2 = events[events["assigned_stage"] == "stage_2"]
@@ -762,6 +959,10 @@ def build_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
         build_entry_excursion_minute_block_summary(events),
         build_entry_excursion_gap_bucket_summary(events),
         build_entry_excursion_alignment_bucket_minute_block_summary(events),
+        build_success_context_summary(events),
+        build_success_context_alignment_bucket_summary(events),
+        build_success_context_stacked_flag_summary(events),
+        build_success_context_alignment_bucket_stacked_flag_summary(events),
     ]
     non_empty_frames = [frame for frame in frames if not frame.empty]
     if not non_empty_frames:

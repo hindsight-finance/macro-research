@@ -504,6 +504,335 @@ def test_marks_same_bar_retrace_and_invalidation():
     assert not event["held_to_1559_close"]
 
 
+def test_stores_first_retrace_candle_metadata_for_bullish_fvg():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 100.5,
+                "High": 101.5,
+                "Low": 100.0,
+                "Close": 101.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:54:00",
+                "Open": 102.5,
+                "High": 102.8,
+                "Low": 101.2,
+                "Close": 101.8,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["first_retrace_candle_at"] == pd.Timestamp("2025-01-02 15:54:00")
+    assert event["first_retrace_candle_open"] == 102.5
+    assert event["first_retrace_candle_high"] == 102.8
+    assert event["first_retrace_candle_low"] == 101.2
+    assert event["first_retrace_candle_close"] == 101.8
+
+
+def test_marks_later_same_side_4_bar_fvg_as_stacked_continuation():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.5,
+                "High": 101.0,
+                "Low": 100.0,
+                "Close": 100.8,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 103.0,
+                "High": 104.0,
+                "Low": 103.0,
+                "Close": 103.5,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    first_event = events[events["assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")].iloc[0]
+    second_event = events[events["assigned_at"] == pd.Timestamp("2025-01-02 15:51:00")].iloc[0]
+    assert not first_event["stacked_continuation_fvg"]
+    assert pd.isna(first_event["stack_predecessor_assigned_at"])
+    assert second_event["stacked_continuation_fvg"]
+    assert second_event["stack_predecessor_assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")
+
+
+def test_marks_bullish_fvg_successful_when_later_breaks_first_retrace_high():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 100.5,
+                "High": 101.5,
+                "Low": 100.0,
+                "Close": 101.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:54:00",
+                "Open": 102.5,
+                "High": 102.8,
+                "Low": 101.2,
+                "Close": 101.8,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:56:00",
+                "Open": 101.9,
+                "High": 103.1,
+                "Low": 101.7,
+                "Close": 102.9,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["first_retrace_candle_high"] == 102.8
+    assert event["success_reference_price"] == 102.8
+    assert event["successful_by_1559"]
+    assert event["success_break_at"] == pd.Timestamp("2025-01-02 15:56:00")
+
+
+def test_marks_bearish_fvg_successful_when_later_breaks_first_retrace_low():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:53:00",
+                "Open": 96.5,
+                "High": 98.5,
+                "Low": 96.2,
+                "Close": 97.8,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:55:00",
+                "Open": 97.5,
+                "High": 97.8,
+                "Low": 95.8,
+                "Close": 96.0,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["first_retrace_candle_low"] == 96.2
+    assert event["success_reference_price"] == 96.2
+    assert event["successful_by_1559"]
+    assert event["success_break_at"] == pd.Timestamp("2025-01-02 15:55:00")
+
+
+def test_retraced_fvg_can_remain_unsuccessful_by_1559():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 100.5,
+                "High": 101.5,
+                "Low": 100.0,
+                "Close": 101.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:54:00",
+                "Open": 102.5,
+                "High": 102.8,
+                "Low": 101.2,
+                "Close": 101.8,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:56:00",
+                "Open": 101.8,
+                "High": 102.8,
+                "Low": 101.4,
+                "Close": 102.1,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 102.0,
+                "High": 102.7,
+                "Low": 101.6,
+                "Close": 102.3,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert event["retraced_by_1559"]
+    assert event["success_reference_price"] == 102.8
+    assert not event["successful_by_1559"]
+    assert pd.isna(event["success_break_at"])
+
+
+def test_no_retrace_keeps_success_context_null():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 100.5,
+                "High": 101.5,
+                "Low": 100.0,
+                "Close": 101.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 102.0,
+                "High": 103.0,
+                "Low": 102.0,
+                "Close": 102.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:54:00",
+                "Open": 102.5,
+                "High": 103.4,
+                "Low": 102.2,
+                "Close": 103.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 103.0,
+                "High": 103.5,
+                "Low": 102.1,
+                "Close": 102.8,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+    scanned = scan_fvg_outcomes_until_1559_close(events, bars)
+
+    event = scanned.iloc[0]
+    assert pd.isna(event["first_retrace_candle_at"])
+    assert pd.isna(event["success_reference_price"])
+    assert not event["successful_by_1559"]
+    assert pd.isna(event["success_break_at"])
+
+
 def test_marks_unconfirmable_late_fvg():
     bars = make_bars(
         [
@@ -1123,6 +1452,165 @@ def test_builds_entry_excursion_gap_bucket_summary():
     assert low_gap_row["mae_pct_mean"] == 0.002
 
 
+def test_builds_success_context_alignment_bucket_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "3_aligned",
+                "stacked_continuation_fvg": False,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": True,
+                "mae_pct_to_1559": 0.002,
+            },
+            {
+                "alignment_bucket": "3_aligned",
+                "stacked_continuation_fvg": False,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": True,
+                "mae_pct_to_1559": 0.006,
+            },
+            {
+                "alignment_bucket": "3_aligned",
+                "stacked_continuation_fvg": False,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": False,
+                "mae_pct_to_1559": float("nan"),
+            },
+        ]
+    )
+
+    summary_builder = getattr(
+        macro_fvg_study,
+        "build_success_context_alignment_bucket_summary",
+        None,
+    )
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    row = summary.iloc[0]
+    assert row["summary_scope"] == "success_context_alignment_bucket"
+    assert row["alignment_bucket"] == "3_aligned"
+    assert row["n_confirmable"] == 3
+    assert row["n_retraced"] == 3
+    assert row["n_successful"] == 2
+    assert row["retrace_rate"] == 1.0
+    assert row["success_after_retrace_rate"] == pytest.approx(2 / 3)
+    assert row["successful_share_of_confirmable"] == pytest.approx(2 / 3)
+    assert row["mae_pct_mean"] == pytest.approx(0.004)
+    assert row["mae_pct_median"] == pytest.approx(0.004)
+    assert row["mae_pct_p75"] == pytest.approx(0.005)
+
+
+def test_builds_success_context_stacked_flag_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "2_aligned_1_opposite",
+                "stacked_continuation_fvg": True,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": True,
+                "mae_pct_to_1559": 0.003,
+            },
+            {
+                "alignment_bucket": "3_aligned",
+                "stacked_continuation_fvg": True,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": False,
+                "mae_pct_to_1559": float("nan"),
+            },
+            {
+                "alignment_bucket": "contains_neutral",
+                "stacked_continuation_fvg": False,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": False,
+                "successful_by_1559": False,
+                "mae_pct_to_1559": float("nan"),
+            },
+        ]
+    )
+
+    summary_builder = getattr(
+        macro_fvg_study,
+        "build_success_context_stacked_flag_summary",
+        None,
+    )
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    stacked_row = summary[summary["stacked_continuation_fvg"]].iloc[0]
+    assert stacked_row["summary_scope"] == "success_context_stacked_flag"
+    assert stacked_row["n_confirmable"] == 2
+    assert stacked_row["n_retraced"] == 2
+    assert stacked_row["n_successful"] == 1
+    assert stacked_row["retrace_rate"] == 1.0
+    assert stacked_row["success_after_retrace_rate"] == 0.5
+    assert stacked_row["successful_share_of_confirmable"] == 0.5
+    assert stacked_row["mae_pct_mean"] == 0.003
+    assert stacked_row["mae_pct_median"] == 0.003
+    assert stacked_row["mae_pct_p75"] == 0.003
+
+
+def test_builds_success_context_alignment_bucket_stacked_flag_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "3_aligned",
+                "stacked_continuation_fvg": True,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": True,
+                "mae_pct_to_1559": 0.004,
+            },
+            {
+                "alignment_bucket": "3_aligned",
+                "stacked_continuation_fvg": True,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": False,
+                "mae_pct_to_1559": float("nan"),
+            },
+            {
+                "alignment_bucket": "3_aligned",
+                "stacked_continuation_fvg": False,
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": True,
+                "mae_pct_to_1559": 0.002,
+            },
+        ]
+    )
+
+    summary_builder = getattr(
+        macro_fvg_study,
+        "build_success_context_alignment_bucket_stacked_flag_summary",
+        None,
+    )
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    row = summary[
+        (summary["alignment_bucket"] == "3_aligned")
+        & (summary["stacked_continuation_fvg"])
+    ].iloc[0]
+    assert row["summary_scope"] == "success_context_alignment_bucket_stacked_flag"
+    assert row["n_confirmable"] == 2
+    assert row["n_retraced"] == 2
+    assert row["n_successful"] == 1
+    assert row["success_after_retrace_rate"] == 0.5
+    assert row["successful_share_of_confirmable"] == 0.5
+    assert row["mae_pct_mean"] == 0.004
+    assert row["mae_pct_median"] == 0.004
+    assert row["mae_pct_p75"] == 0.004
+
+
 def test_builds_bar2_volume_bucket_summary():
     events = pd.DataFrame(
         [
@@ -1323,8 +1811,16 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
         figures_dir=figures_dir,
     )
 
+    events = pd.read_parquet(events_path)
+    summary = pd.read_parquet(summary_path)
+
     assert events_path.exists()
     assert summary_path.exists()
+    assert "successful_by_1559" in events.columns
+    assert "stacked_continuation_fvg" in events.columns
+    assert "first_retrace_candle_at" in events.columns
+    assert "success_context_alignment_bucket" in set(summary["summary_scope"])
+    assert "success_context_stacked_flag" in set(summary["summary_scope"])
     assert (figures_dir / "hold_vs_invalidate_by_side.png").exists()
     assert (figures_dir / "stage1_to_stage2_outcomes.png").exists()
     assert (figures_dir / "creation_minute_outcome_heatmap.png").exists()
