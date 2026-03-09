@@ -754,6 +754,7 @@ def _group_success_context_stats(
         n_retraced = int(group["retraced_by_1559"].fillna(False).sum())
         n_successful = int(group["successful_by_1559"].fillna(False).sum())
         successful = group[group["successful_by_1559"].fillna(False)]
+        mfe = successful["mfe_pct_to_1559"].dropna()
         mae = successful["mae_pct_to_1559"].dropna()
 
         if n_confirmable == 0:
@@ -779,6 +780,9 @@ def _group_success_context_stats(
                 "retrace_rate": retrace_rate,
                 "success_after_retrace_rate": success_after_retrace_rate,
                 "successful_share_of_confirmable": successful_share_of_confirmable,
+                "mfe_pct_mean": float(mfe.mean()) if not mfe.empty else float("nan"),
+                "mfe_pct_median": float(mfe.median()) if not mfe.empty else float("nan"),
+                "mfe_pct_p75": _percentile_or_nan(mfe, 0.75),
                 "mae_pct_mean": float(mae.mean()) if not mae.empty else float("nan"),
                 "mae_pct_median": float(mae.median()) if not mae.empty else float("nan"),
                 "mae_pct_p75": _percentile_or_nan(mae, 0.75),

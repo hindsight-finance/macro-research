@@ -1461,6 +1461,7 @@ def test_builds_success_context_alignment_bucket_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": True,
+                "mfe_pct_to_1559": 0.010,
                 "mae_pct_to_1559": 0.002,
             },
             {
@@ -1469,6 +1470,7 @@ def test_builds_success_context_alignment_bucket_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": True,
+                "mfe_pct_to_1559": 0.020,
                 "mae_pct_to_1559": 0.006,
             },
             {
@@ -1477,6 +1479,7 @@ def test_builds_success_context_alignment_bucket_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
                 "mae_pct_to_1559": float("nan"),
             },
         ]
@@ -1500,6 +1503,9 @@ def test_builds_success_context_alignment_bucket_summary():
     assert row["retrace_rate"] == 1.0
     assert row["success_after_retrace_rate"] == pytest.approx(2 / 3)
     assert row["successful_share_of_confirmable"] == pytest.approx(2 / 3)
+    assert row["mfe_pct_mean"] == pytest.approx(0.015)
+    assert row["mfe_pct_median"] == pytest.approx(0.015)
+    assert row["mfe_pct_p75"] == pytest.approx(0.0175)
     assert row["mae_pct_mean"] == pytest.approx(0.004)
     assert row["mae_pct_median"] == pytest.approx(0.004)
     assert row["mae_pct_p75"] == pytest.approx(0.005)
@@ -1514,6 +1520,7 @@ def test_builds_success_context_stacked_flag_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": True,
+                "mfe_pct_to_1559": 0.009,
                 "mae_pct_to_1559": 0.003,
             },
             {
@@ -1522,6 +1529,7 @@ def test_builds_success_context_stacked_flag_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
                 "mae_pct_to_1559": float("nan"),
             },
             {
@@ -1530,6 +1538,7 @@ def test_builds_success_context_stacked_flag_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": False,
                 "successful_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
                 "mae_pct_to_1559": float("nan"),
             },
         ]
@@ -1552,6 +1561,9 @@ def test_builds_success_context_stacked_flag_summary():
     assert stacked_row["retrace_rate"] == 1.0
     assert stacked_row["success_after_retrace_rate"] == 0.5
     assert stacked_row["successful_share_of_confirmable"] == 0.5
+    assert stacked_row["mfe_pct_mean"] == 0.009
+    assert stacked_row["mfe_pct_median"] == 0.009
+    assert stacked_row["mfe_pct_p75"] == 0.009
     assert stacked_row["mae_pct_mean"] == 0.003
     assert stacked_row["mae_pct_median"] == 0.003
     assert stacked_row["mae_pct_p75"] == 0.003
@@ -1566,6 +1578,7 @@ def test_builds_success_context_alignment_bucket_stacked_flag_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": True,
+                "mfe_pct_to_1559": 0.008,
                 "mae_pct_to_1559": 0.004,
             },
             {
@@ -1574,6 +1587,7 @@ def test_builds_success_context_alignment_bucket_stacked_flag_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
                 "mae_pct_to_1559": float("nan"),
             },
             {
@@ -1582,6 +1596,7 @@ def test_builds_success_context_alignment_bucket_stacked_flag_summary():
                 "is_confirmable_by_1559": True,
                 "retraced_by_1559": True,
                 "successful_by_1559": True,
+                "mfe_pct_to_1559": 0.006,
                 "mae_pct_to_1559": 0.002,
             },
         ]
@@ -1606,6 +1621,9 @@ def test_builds_success_context_alignment_bucket_stacked_flag_summary():
     assert row["n_successful"] == 1
     assert row["success_after_retrace_rate"] == 0.5
     assert row["successful_share_of_confirmable"] == 0.5
+    assert row["mfe_pct_mean"] == 0.008
+    assert row["mfe_pct_median"] == 0.008
+    assert row["mfe_pct_p75"] == 0.008
     assert row["mae_pct_mean"] == 0.004
     assert row["mae_pct_median"] == 0.004
     assert row["mae_pct_p75"] == 0.004
