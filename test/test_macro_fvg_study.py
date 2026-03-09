@@ -3,6 +3,7 @@ import pandas as pd
 from features.macro_fvg_study import (
     build_stage_summary_tables,
     detect_macro_fvgs,
+    run_macro_fvg_study,
     scan_fvg_outcomes_until_1559_close,
 )
 
@@ -79,6 +80,41 @@ def test_excludes_new_detection_assigned_at_1559():
                 "Low": 105.0,
                 "Close": 106.0,
                 "window": "POST",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    assert events.empty
+
+
+def test_does_not_detect_fvg_across_day_boundary():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-01 15:59:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "window": "MACRO",
             },
         ]
     )
@@ -363,3 +399,94 @@ def test_tracks_stage_1_outcomes_during_stage_2_window():
     assert not event["invalidated_in_stage_2"]
     assert event["held_through_stage_2"]
     assert not event["untouched_through_stage_2"]
+
+
+def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
+    input_path = tmp_path / "nq_1m.parquet"
+    events_path = tmp_path / "nq_macro_fvg_events.parquet"
+    summary_path = tmp_path / "nq_macro_fvg_summary.parquet"
+    figures_dir = tmp_path / "figs" / "fvg"
+
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "window": "H3PM",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:52:00",
+                "Open": 95.0,
+                "High": 96.5,
+                "Low": 95.0,
+                "Close": 96.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:55:00",
+                "Open": 96.0,
+                "High": 98.0,
+                "Low": 96.0,
+                "Close": 97.5,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:57:00",
+                "Open": 97.0,
+                "High": 98.0,
+                "Low": 96.0,
+                "Close": 97.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:58:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:59:00",
+                "Open": 95.0,
+                "High": 96.0,
+                "Low": 94.0,
+                "Close": 95.5,
+                "window": "MACRO",
+            },
+        ]
+    )
+    bars.to_parquet(input_path, index=False)
+
+    run_macro_fvg_study(
+        input_path=input_path,
+        events_output_path=events_path,
+        summary_output_path=summary_path,
+        figures_dir=figures_dir,
+    )
+
+    assert events_path.exists()
+    assert summary_path.exists()
+    assert (figures_dir / "hold_vs_invalidate_by_side.png").exists()
+    assert (figures_dir / "stage1_to_stage2_outcomes.png").exists()
+    assert (figures_dir / "creation_minute_outcome_heatmap.png").exists()
+    assert (figures_dir / "gap_size_vs_outcome.png").exists()
