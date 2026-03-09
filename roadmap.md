@@ -1,79 +1,104 @@
-🧠 Close Macro — Practical Research Roadmap
-Core Goal
+# Close Macro Research Roadmap
 
-Build a lightweight system that helps me quantify repeatable patterns in the Nasdaq (NQ) futures market — focused on macro close, 3 pm hour, session behavior, and news-driven volatility.
-The end goal: insights I can act on in live trading, not academic models.
+_Last reviewed: 2026-03-09_
 
-⚙️ Phase 1 — Data Foundation (done / stable enough)
+## Current Position
 
-Goal: Get usable, clean historical NQ futures data in Eastern Time (ET) with proper session segmentation.
+The project is past the original data-foundation stage and partway through the feature/research stage.
 
-Status	Task
-✅	Continuous futures data (NQ) sourced via NinjaTrader
-✅	UTC → ET conversion (DST aware)
-✅	Session tagging (Asia / London / NY / PM / Macro)
-🔄	Validate that UTC and ET columns persist correctly
-⬜	Add simple CLI to slice data by session for fast testing
-⬜	Sanity-check volume/time alignment at session boundaries
+- The tagged intraday data pipeline exists and has already produced `outputs/nq_1m.parquet`, `outputs/es_1m.parquet`, and `outputs/nq_macro_outcomes.parquet`.
+- PM / 3 PM / macro interaction work is implemented in code, but not yet unified into one canonical daily dataset.
+- A macro FVG research track is already further along than the original roadmap and is generating event, summary, and figure outputs.
+- The main gaps are pipeline integration, news wiring, path cleanup, and consistent verification.
 
-Output: session_tagger.parquet with consistent timestamps.
+## Phase 1 - Data Foundation
 
-🧩 Phase 2 — Core Features
+Status: mostly done, with timestamp/path cleanup still open.
 
-Goal: Extract the “behavioral fingerprints” of the market around the PM & Macro sessions.
+| Status | Task | Notes |
+| --- | --- | --- |
+| ✅ | Historical minute data in repo | `input-data/nq_1m.csv` and `input-data/es_1m.csv` exist. |
+| ✅ | Session/window tagging | `session_tagger.py` writes tagged parquet outputs for NQ and ES. |
+| 🔄 | UTC -> ET-naive flow | Current tagging workflow uses UTC -> ET-naive conversion before session/window tagging, but the roadmap still needs clearer wording on how much of that flow is verified end-to-end. |
+| ⬜ | CLI to slice data by session | Not present in the current top-level workflow. |
+| ⬜ | Boundary sanity checks | No explicit boundary-validation script or test coverage found. |
 
-Status	Feature	Description
-✅	macro_outcomes.py	Macro range, direction, expansion/consolidation label
-⬜	pm_hr3.py	3 pm hour + PM session stats (range, direction, close pos, etc.)
-⬜	Add consolidation logic	Detect if hr3 traded “inside a range” (mean-reverting)
-⬜	Tag high/low times	When did hr3 high/low form?
-⬜	Integrate with macro outcomes	Compare PM/3 pm state → next day macro
+Current output: per-instrument tagged parquet exists, but the original "single session_tagger.parquet" wording is no longer accurate.
 
-Output: One Parquet with all session & feature data per day.
+## Phase 2 - Core Features
 
-📊 Phase 3 — Research Modules (Stats That Matter)
+Status: partially done; implementation exists, integration is incomplete.
 
-Goal: Answer practical trader questions through lightweight, visual analysis.
+| Status | Task | Notes |
+| --- | --- | --- |
+| ✅ | Macro outcomes | `macro_outcomes.py` produces `outputs/nq_macro_outcomes.parquet`. |
+| ✅ | PM + 3 PM feature extraction | `features/pm_3pm.py` computes daily PM / HR3 feature sets. |
+| ✅ | High/low timing tags | PM and HR3 high/low timing fields are already in `features/pm_3pm.py`. |
+| 🔄 | PM / 3 PM -> macro integration | `features/pm_macro_interactions.py` merges PM/HR3 with macro outcomes, but its output is not present in `outputs/` and paths are still hard-coded. |
+| ⬜ | Consolidation logic | No finished HR3 consolidation / mean-reversion label yet. |
+| ⬜ | One canonical daily feature parquet | Still missing. The repo currently produces separate datasets, not one consolidated feature table. |
 
-Status	Research Focus	Question
-⬜	Markov Chain of Macro States	If today is consolidation, what’s P(tomorrow = expansion)?
-⬜	Range Clustering	Do high-range macros cluster? Do low-range days cluster?
-⬜	PM → Next Day Predictiveness	Does a strong PM close bias next day direction?
-⬜	3 pm Consolidation Effect	If 3 pm = consolidation, does next hour expand or fade?
-⬜	News Overlap Impact	How does high-impact news near 15:00 or 15:50 change outcomes?
+## Phase 3 - Research Modules
 
-Tools: quick Pandas/Matplotlib notebooks, describe() tables, histograms, transition matrices — no overfitting, no model building.
+Status: started. Descriptive analysis exists, but the original roadmap questions are only partly covered.
 
-📰 Phase 4 — News Integration
+| Status | Research Focus | Notes |
+| --- | --- | --- |
+| ⬜ | Markov chain of macro states | Not implemented yet. |
+| 🔄 | Range clustering / regime context | `viz/macro_analysis.py` and `outputs/figs/ma/` cover descriptive distributions and rolling context, but not a finished clustering workflow. |
+| ⬜ | PM -> next-day predictiveness | Not found as a completed study. |
+| ⬜ | 3 PM consolidation effect | Blocked by missing consolidation labels. |
+| 🔄 | News overlap impact | There is join logic and a CPI analysis script, but not a finished integrated study for the macro/3 PM windows. |
+| ✅ | Macro FVG study (added beyond original roadmap) | `features/macro_fvg_study.py`, `outputs/nq_macro_fvg_events.parquet`, `outputs/nq_macro_fvg_summary.parquet`, and `outputs/figs/fvg/` already exist. |
 
-Goal: Merge economic calendar events to flag “special conditions.”
+## Phase 4 - News Integration
 
-Status	Task
-✅	Scraper for ForexFactory events (USD only)
-✅	Parquet file: econ_events.parquet
-⬜	Merge with session data via timestamp proximity
-⬜	Drop irrelevant (speeches, low impact)
-⬜	Build is_news_day / is_holiday flag per session/day
+Status: partially done; the data and helper layer exist, but the main pipeline is not wired through.
 
-Purpose: Filter or segment stats — e.g., “range expansion % on non-news days.”
+| Status | Task | Notes |
+| --- | --- | --- |
+| 🔄 | ForexFactory scraper available externally | The scraper exists, but it lives in a different repo rather than this workspace. |
+| ✅ | Economic events parquet | `input-data/economic_events.parquet` exists and currently contains 1,567 rows. |
+| ✅ | News normalization / join helper | `utils/helper.py` classifies events and builds daily or event-level joins. |
+| 🔄 | Drop irrelevant speeches / low-impact events | Implemented as filters in the helper layer, but not yet promoted into one canonical output dataset. |
+| 🔄 | Merge events with session or macro data | Helper functions exist and `test/cpi.py` uses them, but the merge is not part of the main pipeline. |
+| ⬜ | Persist `is_news_day` / `is_holiday` flags | Not found in the main outputs. |
 
-🧠 Phase 5 — Interpretation Layer
+## Phase 5 - Interpretation Layer
 
-Goal: Turn numbers into edge.
+Status: started, but script-based rather than notebook/card-based.
 
-Status	Task
-⬜	Create simple notebooks for each research module (1 page each)
-⬜	Visualize key findings: histograms, conditional probabilities, transitions
-⬜	Summarize “insight cards” — e.g.
-“When hr3 is consolidating, next macro expands 65% of time.”	
-⬜	Rank insights by stability, intuitive logic, and trade potential
-🧰 Phase 6 — Maintenance / Workflow
+| Status | Task | Notes |
+| --- | --- | --- |
+| 🔄 | Simple research summaries | Visual analysis scripts exist, but not the one-page notebook flow described in the original roadmap. |
+| ✅ | Visualize findings | `viz/` scripts and generated figures already exist for macro stats and FVG work. |
+| ⬜ | Insight cards | Not found. |
+| ⬜ | Rank insights by stability / tradeability | Not found. |
 
-Goal: Keep it lean & usable.
+## Phase 6 - Maintenance / Workflow
 
-Task
-Keep /data / /features / /research structure tidy
-Use GitHub Project board to track features + analyses
-After each chat → summarize outcome in roadmap or issue
-Don’t refactor for elegance — just ensure reproducibility
-Once per week → quick “insight dump” update (what we learned)
+Status: active cleanup needed.
+
+| Status | Task | Notes |
+| --- | --- | --- |
+| 🔄 | Keep structure tidy | The repo is usable, but path conventions are inconsistent: some scripts expect `data/`, others use `input-data/`, and some feature/viz scripts hard-code `../outputs/`. |
+| ⬜ | Project tracking workflow | No repo-local evidence of a project board or issue workflow. |
+| 🔄 | Summarize progress back into roadmap | This roadmap update does that, but it is not yet automated or habitual. |
+| ⚠️ | Reproducibility hardening | Verification is not clean end-to-end: the close-macro FVG suite is close but currently has one failing figure expectation, and broader trend/LRLR tests fail in this environment due to missing dependencies/import path issues. |
+
+## What The Repo Says We Are Doing Right Now
+
+The practical current state is:
+
+1. Stable enough tagged intraday data and macro outcomes already exist.
+2. PM / 3 PM / macro interaction code exists but still needs to be made into one reproducible feature pipeline.
+3. Macro FVG analysis is the most advanced active research branch beyond the original roadmap.
+4. News data is available and helper logic exists, but it is not yet first-class in the main outputs.
+5. The next real milestone is not "start research" but "consolidate the data products and make the research workflow reproducible."
+
+## Immediate Next Steps
+
+1. Finish the canonical daily dataset: tagged bars -> PM/HR3 features -> macro outcomes -> news flags.
+2. Replace hard-coded relative paths with repo-root-safe paths so feature and viz scripts run consistently from the project root.
+3. Decide whether trend/LRLR work belongs on this roadmap or should be tracked as a separate research track.
+4. Promote one research question into a clean reproducible study output: Markov transitions, PM -> next-day behavior, or news segmentation.
