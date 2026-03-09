@@ -21,6 +21,7 @@ env/
 .vscode/
 .DS_Store
 Thumbs.db
+.worktrees/
 
 # Local environment files
 .env
