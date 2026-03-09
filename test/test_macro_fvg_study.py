@@ -1611,6 +1611,50 @@ def test_builds_success_context_alignment_bucket_stacked_flag_summary():
     assert row["mae_pct_p75"] == 0.004
 
 
+def test_plot_successful_fvg_mae_by_alignment_bucket_overlays_success_rate(
+    tmp_path,
+    monkeypatch,
+):
+    summary = pd.DataFrame(
+        [
+            {
+                "summary_scope": "success_context_alignment_bucket",
+                "alignment_bucket": "3_aligned",
+                "mae_pct_mean": 0.004,
+                "mae_pct_median": 0.003,
+                "mae_pct_p75": 0.006,
+                "successful_share_of_confirmable": 0.40,
+            },
+            {
+                "summary_scope": "success_context_alignment_bucket",
+                "alignment_bucket": "2_aligned_1_opposite",
+                "mae_pct_mean": 0.005,
+                "mae_pct_median": 0.004,
+                "mae_pct_p75": 0.007,
+                "successful_share_of_confirmable": 0.25,
+            },
+        ]
+    )
+
+    captured = {}
+    original_close = macro_fvg_study.plt.close
+
+    def capture_close(fig=None):
+        captured["fig"] = fig if fig is not None else macro_fvg_study.plt.gcf()
+
+    monkeypatch.setattr(macro_fvg_study.plt, "close", capture_close)
+
+    macro_fvg_study.plot_successful_fvg_mae_by_alignment_bucket(summary, tmp_path)
+
+    fig = captured["fig"]
+    assert len(fig.axes) == 2
+    secondary_ax = fig.axes[1]
+    assert secondary_ax.get_ylabel() == "Success Rate"
+    assert len(secondary_ax.lines) == 1
+    assert list(secondary_ax.lines[0].get_ydata()) == pytest.approx([40.0, 25.0])
+    original_close(fig)
+
+
 def test_builds_bar2_volume_bucket_summary():
     events = pd.DataFrame(
         [

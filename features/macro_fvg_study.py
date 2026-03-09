@@ -1384,12 +1384,13 @@ def plot_successful_fvg_mae_by_alignment_bucket(summary: pd.DataFrame, figures_d
         categories=ALIGNMENT_BUCKET_ORDER,
         ordered=True,
     )
-    plot_frame = (
+    ordered_summary = (
         success_summary.sort_values("alignment_bucket")
         .dropna(subset=["alignment_bucket"])
-        .set_index("alignment_bucket")[["mae_pct_mean", "mae_pct_median", "mae_pct_p75"]]
-        * 100.0
     )
+    plot_frame = ordered_summary.set_index("alignment_bucket")[
+        ["mae_pct_mean", "mae_pct_median", "mae_pct_p75"]
+    ] * 100.0
     if plot_frame.empty:
         _save_placeholder_figure(
             figures_dir / "successful_fvg_mae_by_alignment_bucket.png",
@@ -1403,7 +1404,24 @@ def plot_successful_fvg_mae_by_alignment_bucket(summary: pd.DataFrame, figures_d
     ax.set_xlabel("Alignment Bucket")
     ax.set_ylabel("Percent")
     ax.tick_params(axis="x", rotation=20)
-    ax.legend(["MAE Mean", "MAE Median", "MAE P75"], loc="upper right")
+    success_rate_pct = ordered_summary.set_index("alignment_bucket")[
+        "successful_share_of_confirmable"
+    ] * 100.0
+    ax2 = ax.twinx()
+    ax2.plot(
+        range(len(plot_frame.index)),
+        success_rate_pct.reindex(plot_frame.index).to_numpy(),
+        color="#252525",
+        marker="o",
+        linewidth=2,
+        label="Success Rate",
+    )
+    ax2.set_ylabel("Success Rate")
+    ax2.set_ylim(0, 100)
+
+    mae_handles, mae_labels = ax.get_legend_handles_labels()
+    success_handles, success_labels = ax2.get_legend_handles_labels()
+    ax.legend(mae_handles + success_handles, mae_labels + success_labels, loc="upper right")
     fig.tight_layout()
     fig.savefig(figures_dir / "successful_fvg_mae_by_alignment_bucket.png")
     plt.close(fig)
