@@ -17,6 +17,12 @@ NO_NEW_ASSIGNMENTS_AT = "15:59:00"
 STAGE_1_END = "15:54:00"
 STAGE_2_END = "15:58:00"
 FINAL_SCAN_TIME = "15:59:00"
+ALIGNMENT_BUCKET_ORDER = [
+    "3_aligned",
+    "2_aligned_1_opposite",
+    "1_aligned_2_opposite",
+    "contains_neutral",
+]
 SUMMARY_COLUMNS = [
     "summary_scope",
     "fvg_side",
@@ -41,6 +47,37 @@ def assign_stage(ts: pd.Timestamp) -> str:
     return "outside"
 
 
+def classify_candle_direction(open_price: float, close_price: float) -> str:
+    if close_price > open_price:
+        return "bullish"
+    if close_price < open_price:
+        return "bearish"
+    return "neutral"
+
+
+def assign_alignment_bucket(
+    fvg_side: str,
+    directions: list[str],
+) -> tuple[int, int, int, str]:
+    aligned_label = "bullish" if fvg_side == "bullish" else "bearish"
+    aligned_count = sum(direction == aligned_label for direction in directions)
+    neutral_count = sum(direction == "neutral" for direction in directions)
+    opposite_count = len(directions) - aligned_count - neutral_count
+
+    if neutral_count > 0:
+        bucket = "contains_neutral"
+    elif aligned_count == 3:
+        bucket = "3_aligned"
+    elif aligned_count == 2:
+        bucket = "2_aligned_1_opposite"
+    elif aligned_count == 1:
+        bucket = "1_aligned_2_opposite"
+    else:
+        raise ValueError("Unexpected zero-aligned non-neutral FVG pattern")
+
+    return aligned_count, opposite_count, neutral_count, bucket
+
+
 def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     required = {"DateTime_ET", "Open", "High", "Low", "Close", "Volume", "window"}
     missing = required.difference(df.columns)
@@ -52,9 +89,13 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     work = work.sort_values("DateTime_ET").reset_index(drop=True)
     work["bar1_date"] = work["DateTime_ET"].shift(1).dt.normalize()
     work["bar3_date"] = work["DateTime_ET"].shift(-1).dt.normalize()
+    work["bar1_open"] = work["Open"].shift(1)
+    work["bar1_close"] = work["Close"].shift(1)
     work["bar1_high"] = work["High"].shift(1)
     work["bar1_low"] = work["Low"].shift(1)
     work["bar3_time"] = work["DateTime_ET"].shift(-1)
+    work["bar3_open"] = work["Open"].shift(-1)
+    work["bar3_close"] = work["Close"].shift(-1)
     work["bar3_high"] = work["High"].shift(-1)
     work["bar3_low"] = work["Low"].shift(-1)
 
@@ -87,6 +128,13 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
                 "gap_size",
                 "bar2_volume",
                 "is_confirmable_by_1559",
+                "bar1_direction",
+                "bar2_direction",
+                "bar3_direction",
+                "aligned_count",
+                "opposite_count",
+                "neutral_count",
+                "alignment_bucket",
             ]
         )
 
@@ -116,6 +164,34 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     event_rows["is_confirmable_by_1559"] = (
         event_rows["confirmed_at"].dt.strftime("%H:%M:%S") <= FINAL_SCAN_TIME
     )
+    event_rows["bar1_direction"] = [
+        classify_candle_direction(open_price, close_price)
+        for open_price, close_price in zip(event_rows["bar1_open"], event_rows["bar1_close"])
+    ]
+    event_rows["bar2_direction"] = [
+        classify_candle_direction(open_price, close_price)
+        for open_price, close_price in zip(event_rows["Open"], event_rows["Close"])
+    ]
+    event_rows["bar3_direction"] = [
+        classify_candle_direction(open_price, close_price)
+        for open_price, close_price in zip(event_rows["bar3_open"], event_rows["bar3_close"])
+    ]
+    alignment = [
+        assign_alignment_bucket(fvg_side, [bar1_direction, bar2_direction, bar3_direction])
+        for fvg_side, bar1_direction, bar2_direction, bar3_direction in zip(
+            event_rows["fvg_side"],
+            event_rows["bar1_direction"],
+            event_rows["bar2_direction"],
+            event_rows["bar3_direction"],
+        )
+    ]
+    event_rows[
+        ["aligned_count", "opposite_count", "neutral_count", "alignment_bucket"]
+    ] = pd.DataFrame(
+        alignment,
+        index=event_rows.index,
+        columns=["aligned_count", "opposite_count", "neutral_count", "alignment_bucket"],
+    )
 
     return event_rows[
         [
@@ -131,6 +207,13 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
             "gap_size",
             "bar2_volume",
             "is_confirmable_by_1559",
+            "bar1_direction",
+            "bar2_direction",
+            "bar3_direction",
+            "aligned_count",
+            "opposite_count",
+            "neutral_count",
+            "alignment_bucket",
         ]
     ].reset_index(drop=True)
 

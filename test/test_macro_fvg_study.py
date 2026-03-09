@@ -142,6 +142,188 @@ def test_detect_macro_fvg_stores_later_assigned_minute_index():
     assert event["bar2_volume"] == 55
 
 
+def test_detect_macro_fvg_stores_alignment_bucket_for_three_aligned():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 99.0,
+                "Volume": 10,
+                "window": "H3PM",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "Volume": 25,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 97.0,
+                "High": 98.0,
+                "Low": 95.0,
+                "Close": 96.0,
+                "Volume": 40,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    event = events.iloc[0]
+    assert event["fvg_side"] == "bearish"
+    assert event["bar1_direction"] == "bearish"
+    assert event["bar2_direction"] == "bearish"
+    assert event["bar3_direction"] == "bearish"
+    assert event["aligned_count"] == 3
+    assert event["opposite_count"] == 0
+    assert event["neutral_count"] == 0
+    assert event["alignment_bucket"] == "3_aligned"
+
+
+def test_detect_macro_fvg_stores_alignment_bucket_for_two_aligned_one_opposite():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 101.0,
+                "High": 101.5,
+                "Low": 98.5,
+                "Close": 99.0,
+                "Volume": 100,
+                "window": "H3PM",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "Volume": 110,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 95.0,
+                "High": 96.5,
+                "Low": 94.0,
+                "Close": 96.0,
+                "Volume": 120,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    event = events.iloc[0]
+    assert event["fvg_side"] == "bearish"
+    assert event["bar1_direction"] == "bearish"
+    assert event["bar2_direction"] == "bearish"
+    assert event["bar3_direction"] == "bullish"
+    assert event["aligned_count"] == 2
+    assert event["opposite_count"] == 1
+    assert event["neutral_count"] == 0
+    assert event["alignment_bucket"] == "2_aligned_1_opposite"
+
+
+def test_detect_macro_fvg_stores_alignment_bucket_for_one_aligned_two_opposite():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 97.0,
+                "High": 100.0,
+                "Low": 96.0,
+                "Close": 99.0,
+                "Volume": 10,
+                "window": "H3PM",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 96.0,
+                "High": 99.0,
+                "Low": 95.0,
+                "Close": 98.0,
+                "Volume": 25,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 95.0,
+                "High": 95.0,
+                "Low": 93.0,
+                "Close": 94.0,
+                "Volume": 40,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    event = events.iloc[0]
+    assert event["fvg_side"] == "bearish"
+    assert event["bar1_direction"] == "bullish"
+    assert event["bar2_direction"] == "bullish"
+    assert event["bar3_direction"] == "bearish"
+    assert event["aligned_count"] == 1
+    assert event["opposite_count"] == 2
+    assert event["neutral_count"] == 0
+    assert event["alignment_bucket"] == "1_aligned_2_opposite"
+
+
+def test_detect_macro_fvg_marks_contains_neutral_when_pattern_has_doji():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 101.0,
+                "High": 101.5,
+                "Low": 98.5,
+                "Close": 99.0,
+                "Volume": 100,
+                "window": "H3PM",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 99.0,
+                "Volume": 110,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 95.0,
+                "High": 96.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "Volume": 120,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    event = events.iloc[0]
+    assert event["bar2_direction"] == "neutral"
+    assert event["bar3_direction"] == "neutral"
+    assert event["aligned_count"] == 1
+    assert event["opposite_count"] == 0
+    assert event["neutral_count"] == 2
+    assert event["alignment_bucket"] == "contains_neutral"
+
+
 def test_excludes_new_detection_assigned_at_1559():
     bars = make_bars(
         [
