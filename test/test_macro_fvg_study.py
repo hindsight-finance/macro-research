@@ -1337,3 +1337,7 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     assert (figures_dir / "alignment_bucket_by_minute_block.png").exists()
     assert (figures_dir / "alignment_bucket_by_gap_bucket.png").exists()
     assert (figures_dir / "alignment_bucket_counts.png").exists()
+    assert (figures_dir / "entry_trigger_rate_by_alignment_bucket.png").exists()
+    assert (figures_dir / "mfe_mae_pct_by_alignment_bucket.png").exists()
+    assert (figures_dir / "mfe_pct_by_minute_block.png").exists()
+    assert (figures_dir / "mfe_pct_by_gap_bucket.png").exists()

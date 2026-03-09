@@ -1049,6 +1049,124 @@ def plot_alignment_bucket_counts(events: pd.DataFrame, figures_dir: Path) -> Non
     plt.close(fig)
 
 
+def plot_entry_trigger_rate_by_alignment_bucket(summary: pd.DataFrame, figures_dir: Path) -> None:
+    excursion_summary = summary[
+        summary["summary_scope"] == "entry_excursion_alignment_bucket"
+    ].copy()
+    if excursion_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "entry_trigger_rate_by_alignment_bucket.png",
+            "Entry Trigger Rate by Alignment Bucket",
+        )
+        return
+
+    excursion_summary["alignment_bucket"] = pd.Categorical(
+        excursion_summary["alignment_bucket"],
+        categories=ALIGNMENT_BUCKET_ORDER,
+        ordered=True,
+    )
+    plot_frame = excursion_summary.sort_values("alignment_bucket").dropna(
+        subset=["alignment_bucket"]
+    )
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.bar(plot_frame["alignment_bucket"], plot_frame["entry_trigger_rate"], color="#3182bd")
+    ax.set_title("Entry Trigger Rate by Alignment Bucket")
+    ax.set_xlabel("Alignment Bucket")
+    ax.set_ylabel("Trigger Rate")
+    ax.set_ylim(0, 1)
+    ax.tick_params(axis="x", rotation=20)
+    fig.tight_layout()
+    fig.savefig(figures_dir / "entry_trigger_rate_by_alignment_bucket.png")
+    plt.close(fig)
+
+
+def plot_mfe_mae_pct_by_alignment_bucket(summary: pd.DataFrame, figures_dir: Path) -> None:
+    excursion_summary = summary[
+        summary["summary_scope"] == "entry_excursion_alignment_bucket"
+    ].copy()
+    if excursion_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "mfe_mae_pct_by_alignment_bucket.png",
+            "MFE and MAE Percent by Alignment Bucket",
+        )
+        return
+
+    excursion_summary["alignment_bucket"] = pd.Categorical(
+        excursion_summary["alignment_bucket"],
+        categories=ALIGNMENT_BUCKET_ORDER,
+        ordered=True,
+    )
+    plot_frame = (
+        excursion_summary.sort_values("alignment_bucket")
+        .dropna(subset=["alignment_bucket"])
+        .set_index("alignment_bucket")[["mfe_pct_mean", "mae_pct_mean"]]
+        * 100.0
+    )
+    fig, ax = plt.subplots(figsize=(9, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#31a354", "#de2d26"])
+    ax.set_title("MFE and MAE Percent by Alignment Bucket")
+    ax.set_xlabel("Alignment Bucket")
+    ax.set_ylabel("Percent")
+    ax.tick_params(axis="x", rotation=20)
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "mfe_mae_pct_by_alignment_bucket.png")
+    plt.close(fig)
+
+
+def plot_mfe_pct_by_minute_block(summary: pd.DataFrame, figures_dir: Path) -> None:
+    minute_summary = summary[summary["summary_scope"] == "entry_excursion_minute_block"].copy()
+    if minute_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "mfe_pct_by_minute_block.png",
+            "MFE Percent by Minute Block",
+        )
+        return
+
+    minute_summary["minute_block"] = pd.Categorical(
+        minute_summary["minute_block"],
+        categories=MINUTE_BLOCK_ORDER,
+        ordered=True,
+    )
+    plot_frame = minute_summary.sort_values("minute_block").dropna(subset=["minute_block"])
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.bar(plot_frame["minute_block"], plot_frame["mfe_pct_mean"] * 100.0, color="#756bb1")
+    ax.set_title("MFE Percent by Minute Block")
+    ax.set_xlabel("Minute Block")
+    ax.set_ylabel("Percent")
+    ax.tick_params(axis="x", rotation=20)
+    fig.tight_layout()
+    fig.savefig(figures_dir / "mfe_pct_by_minute_block.png")
+    plt.close(fig)
+
+
+def plot_mfe_pct_by_gap_bucket(summary: pd.DataFrame, figures_dir: Path) -> None:
+    gap_summary = summary[summary["summary_scope"] == "entry_excursion_gap_bucket"].copy()
+    if gap_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "mfe_pct_by_gap_bucket.png",
+            "MFE Percent by Gap Bucket",
+        )
+        return
+
+    gap_summary["gap_size_bucket_225"] = pd.Categorical(
+        gap_summary["gap_size_bucket_225"],
+        categories=GAP_SIZE_BUCKET_ORDER,
+        ordered=True,
+    )
+    plot_frame = gap_summary.sort_values("gap_size_bucket_225").dropna(
+        subset=["gap_size_bucket_225"]
+    )
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.bar(plot_frame["gap_size_bucket_225"], plot_frame["mfe_pct_mean"] * 100.0, color="#fd8d3c")
+    ax.set_title("MFE Percent by Gap Bucket")
+    ax.set_xlabel("Gap Bucket")
+    ax.set_ylabel("Percent")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "mfe_pct_by_gap_bucket.png")
+    plt.close(fig)
+
+
 def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figures_dir: Path) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1066,6 +1184,10 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
             ("alignment_bucket_by_minute_block.png", "Alignment Bucket by Minute Block"),
             ("alignment_bucket_by_gap_bucket.png", "Alignment Bucket by Gap Bucket"),
             ("alignment_bucket_counts.png", "Alignment Bucket Counts"),
+            ("entry_trigger_rate_by_alignment_bucket.png", "Entry Trigger Rate by Alignment Bucket"),
+            ("mfe_mae_pct_by_alignment_bucket.png", "MFE and MAE Percent by Alignment Bucket"),
+            ("mfe_pct_by_minute_block.png", "MFE Percent by Minute Block"),
+            ("mfe_pct_by_gap_bucket.png", "MFE Percent by Gap Bucket"),
         ]:
             _save_placeholder_figure(figures_dir / filename, title)
         return
@@ -1194,6 +1316,10 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
     plot_alignment_bucket_by_minute_block(summary, figures_dir)
     plot_alignment_bucket_by_gap_bucket(summary, figures_dir)
     plot_alignment_bucket_counts(events, figures_dir)
+    plot_entry_trigger_rate_by_alignment_bucket(summary, figures_dir)
+    plot_mfe_mae_pct_by_alignment_bucket(summary, figures_dir)
+    plot_mfe_pct_by_minute_block(summary, figures_dir)
+    plot_mfe_pct_by_gap_bucket(summary, figures_dir)
 
 
 def run_macro_fvg_study(
