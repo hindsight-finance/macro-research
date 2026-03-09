@@ -986,6 +986,143 @@ def test_builds_alignment_bucket_gap_bucket_summary():
     assert set(summary["gap_size_bucket_225"]) == {"<2.25", ">=2.25"}
 
 
+def test_builds_entry_excursion_alignment_bucket_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "3_aligned",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": ">=2.25",
+                "is_confirmable_by_1559": True,
+                "entry_triggered_by_1559": True,
+                "mfe_pct_to_1559": 0.012,
+                "mae_pct_to_1559": 0.004,
+            },
+            {
+                "alignment_bucket": "3_aligned",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": ">=2.25",
+                "is_confirmable_by_1559": True,
+                "entry_triggered_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
+                "mae_pct_to_1559": float("nan"),
+            },
+        ]
+    )
+
+    summary_builder = getattr(
+        macro_fvg_study,
+        "build_entry_excursion_alignment_bucket_summary",
+        None,
+    )
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    row = summary.iloc[0]
+    assert row["summary_scope"] == "entry_excursion_alignment_bucket"
+    assert row["alignment_bucket"] == "3_aligned"
+    assert row["n_confirmable"] == 2
+    assert row["n_triggered"] == 1
+    assert row["entry_trigger_rate"] == 0.5
+    assert row["mfe_pct_mean"] == 0.012
+    assert row["mae_pct_mean"] == 0.004
+
+
+def test_builds_entry_excursion_alignment_bucket_minute_block_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "2_aligned_1_opposite",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": "<2.25",
+                "is_confirmable_by_1559": True,
+                "entry_triggered_by_1559": True,
+                "mfe_pct_to_1559": 0.010,
+                "mae_pct_to_1559": 0.003,
+            },
+            {
+                "alignment_bucket": "2_aligned_1_opposite",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": "<2.25",
+                "is_confirmable_by_1559": True,
+                "entry_triggered_by_1559": True,
+                "mfe_pct_to_1559": 0.020,
+                "mae_pct_to_1559": 0.005,
+            },
+            {
+                "alignment_bucket": "2_aligned_1_opposite",
+                "minute_block": "15:53-15:57",
+                "gap_size_bucket_225": "<2.25",
+                "is_confirmable_by_1559": True,
+                "entry_triggered_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
+                "mae_pct_to_1559": float("nan"),
+            },
+        ]
+    )
+
+    summary_builder = getattr(
+        macro_fvg_study,
+        "build_entry_excursion_alignment_bucket_minute_block_summary",
+        None,
+    )
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    early_row = summary[summary["minute_block"] == "15:50-15:52"].iloc[0]
+    assert early_row["summary_scope"] == "entry_excursion_alignment_bucket_minute_block"
+    assert early_row["alignment_bucket"] == "2_aligned_1_opposite"
+    assert early_row["n_confirmable"] == 2
+    assert early_row["n_triggered"] == 2
+    assert early_row["entry_trigger_rate"] == 1.0
+    assert early_row["mfe_pct_mean"] == pytest.approx(0.015)
+    assert early_row["mae_pct_mean"] == pytest.approx(0.004)
+
+
+def test_builds_entry_excursion_gap_bucket_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "contains_neutral",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": "<2.25",
+                "is_confirmable_by_1559": True,
+                "entry_triggered_by_1559": True,
+                "mfe_pct_to_1559": 0.008,
+                "mae_pct_to_1559": 0.002,
+            },
+            {
+                "alignment_bucket": "contains_neutral",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": ">=2.25",
+                "is_confirmable_by_1559": True,
+                "entry_triggered_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
+                "mae_pct_to_1559": float("nan"),
+            },
+        ]
+    )
+
+    summary_builder = getattr(
+        macro_fvg_study,
+        "build_entry_excursion_gap_bucket_summary",
+        None,
+    )
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    assert summary["summary_scope"].eq("entry_excursion_gap_bucket").all()
+    low_gap_row = summary[summary["gap_size_bucket_225"] == "<2.25"].iloc[0]
+    assert low_gap_row["n_confirmable"] == 1
+    assert low_gap_row["n_triggered"] == 1
+    assert low_gap_row["entry_trigger_rate"] == 1.0
+    assert low_gap_row["mfe_pct_mean"] == 0.008
+    assert low_gap_row["mae_pct_mean"] == 0.002
+
+
 def test_builds_bar2_volume_bucket_summary():
     events = pd.DataFrame(
         [

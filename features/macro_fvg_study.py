@@ -33,10 +33,20 @@ SUMMARY_COLUMNS = [
     "gap_size_bucket_225",
     "n_total",
     "n_confirmable",
+    "n_triggered",
+    "entry_trigger_rate",
     "hold_rate",
     "retrace_rate",
     "untouched_rate",
     "invalidation_rate",
+    "mfe_pct_mean",
+    "mfe_pct_median",
+    "mfe_pct_p75",
+    "mfe_pct_p90",
+    "mae_pct_mean",
+    "mae_pct_median",
+    "mae_pct_p75",
+    "mae_pct_p90",
     "assigned_minute_hhmm",
     "assigned_minute_index",
     "bar2_volume_bucket",
@@ -555,6 +565,63 @@ def _group_outcome_rates(events: pd.DataFrame, group_cols: list[str], scope_name
     return pd.DataFrame(rows).reindex(columns=SUMMARY_COLUMNS)
 
 
+def _percentile_or_nan(series: pd.Series, q: float) -> float:
+    clean = series.dropna()
+    if clean.empty:
+        return float("nan")
+    return float(clean.quantile(q))
+
+
+def _group_entry_excursion_stats(
+    events: pd.DataFrame,
+    group_cols: list[str],
+    scope_name: str,
+) -> pd.DataFrame:
+    if events.empty:
+        return _empty_summary_table()
+
+    grouped = [((None,), events)] if not group_cols else events.groupby(group_cols, dropna=False, sort=False)
+    rows = []
+    for group_key, group in grouped:
+        row = {}
+        if group_cols:
+            group_values = group_key if isinstance(group_key, tuple) else (group_key,)
+            row.update(dict(zip(group_cols, group_values)))
+
+        n_total = len(group)
+        n_confirmable = int(group["is_confirmable_by_1559"].sum())
+        triggered = group[group["entry_triggered_by_1559"].fillna(False)]
+        n_triggered = len(triggered)
+        if n_confirmable == 0:
+            entry_trigger_rate = float("nan")
+        else:
+            entry_trigger_rate = float(n_triggered / n_confirmable)
+
+        mfe = triggered["mfe_pct_to_1559"].dropna()
+        mae = triggered["mae_pct_to_1559"].dropna()
+        row.update(
+            {
+                "summary_scope": scope_name,
+                "fvg_side": np.nan,
+                "n_total": int(n_total),
+                "n_confirmable": n_confirmable,
+                "n_triggered": int(n_triggered),
+                "entry_trigger_rate": entry_trigger_rate,
+                "mfe_pct_mean": float(mfe.mean()) if not mfe.empty else float("nan"),
+                "mfe_pct_median": float(mfe.median()) if not mfe.empty else float("nan"),
+                "mfe_pct_p75": _percentile_or_nan(mfe, 0.75),
+                "mfe_pct_p90": _percentile_or_nan(mfe, 0.90),
+                "mae_pct_mean": float(mae.mean()) if not mae.empty else float("nan"),
+                "mae_pct_median": float(mae.median()) if not mae.empty else float("nan"),
+                "mae_pct_p75": _percentile_or_nan(mae, 0.75),
+                "mae_pct_p90": _percentile_or_nan(mae, 0.90),
+            }
+        )
+        rows.append(row)
+
+    return pd.DataFrame(rows).reindex(columns=SUMMARY_COLUMNS)
+
+
 def build_creation_minute_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_outcome_rates(
         events,
@@ -609,6 +676,44 @@ def build_alignment_bucket_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFr
     )
 
 
+def build_entry_excursion_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_entry_excursion_stats(events, [], "entry_excursion_overall")
+
+
+def build_entry_excursion_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_entry_excursion_stats(
+        events,
+        ["alignment_bucket"],
+        "entry_excursion_alignment_bucket",
+    )
+
+
+def build_entry_excursion_minute_block_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_entry_excursion_stats(
+        events,
+        ["minute_block"],
+        "entry_excursion_minute_block",
+    )
+
+
+def build_entry_excursion_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_entry_excursion_stats(
+        events,
+        ["gap_size_bucket_225"],
+        "entry_excursion_gap_bucket",
+    )
+
+
+def build_entry_excursion_alignment_bucket_minute_block_summary(
+    events: pd.DataFrame,
+) -> pd.DataFrame:
+    return _group_entry_excursion_stats(
+        events,
+        ["alignment_bucket", "minute_block"],
+        "entry_excursion_alignment_bucket_minute_block",
+    )
+
+
 def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
     stage_1 = events[events["assigned_stage"] == "stage_1"]
     stage_2 = events[events["assigned_stage"] == "stage_2"]
@@ -652,6 +757,11 @@ def build_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
         build_alignment_bucket_summary(events),
         build_alignment_bucket_minute_block_summary(events),
         build_alignment_bucket_gap_bucket_summary(events),
+        build_entry_excursion_summary(events),
+        build_entry_excursion_alignment_bucket_summary(events),
+        build_entry_excursion_minute_block_summary(events),
+        build_entry_excursion_gap_bucket_summary(events),
+        build_entry_excursion_alignment_bucket_minute_block_summary(events),
     ]
     non_empty_frames = [frame for frame in frames if not frame.empty]
     if not non_empty_frames:
