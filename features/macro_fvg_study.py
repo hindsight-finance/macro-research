@@ -1368,6 +1368,89 @@ def plot_mfe_pct_by_gap_bucket(summary: pd.DataFrame, figures_dir: Path) -> None
     plt.close(fig)
 
 
+def plot_successful_fvg_mae_by_alignment_bucket(summary: pd.DataFrame, figures_dir: Path) -> None:
+    success_summary = summary[
+        summary["summary_scope"] == "success_context_alignment_bucket"
+    ].copy()
+    if success_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "successful_fvg_mae_by_alignment_bucket.png",
+            "Successful FVG MAE by Alignment Bucket",
+        )
+        return
+
+    success_summary["alignment_bucket"] = pd.Categorical(
+        success_summary["alignment_bucket"],
+        categories=ALIGNMENT_BUCKET_ORDER,
+        ordered=True,
+    )
+    plot_frame = (
+        success_summary.sort_values("alignment_bucket")
+        .dropna(subset=["alignment_bucket"])
+        .set_index("alignment_bucket")[["mae_pct_mean", "mae_pct_median", "mae_pct_p75"]]
+        * 100.0
+    )
+    if plot_frame.empty:
+        _save_placeholder_figure(
+            figures_dir / "successful_fvg_mae_by_alignment_bucket.png",
+            "Successful FVG MAE by Alignment Bucket",
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#de2d26", "#fd8d3c", "#3182bd"])
+    ax.set_title("Successful FVG MAE by Alignment Bucket")
+    ax.set_xlabel("Alignment Bucket")
+    ax.set_ylabel("Percent")
+    ax.tick_params(axis="x", rotation=20)
+    ax.legend(["MAE Mean", "MAE Median", "MAE P75"], loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "successful_fvg_mae_by_alignment_bucket.png")
+    plt.close(fig)
+
+
+def plot_successful_fvg_mae_by_stacked_flag(summary: pd.DataFrame, figures_dir: Path) -> None:
+    success_summary = summary[
+        summary["summary_scope"] == "success_context_stacked_flag"
+    ].copy()
+    if success_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "successful_fvg_mae_by_stacked_flag.png",
+            "Successful FVG MAE by Stacked Flag",
+        )
+        return
+
+    success_summary["stack_label"] = np.where(
+        success_summary["stacked_continuation_fvg"].fillna(False),
+        "stacked_continuation",
+        "base_fvg",
+    )
+    plot_frame = (
+        success_summary.set_index("stack_label")[["mae_pct_mean", "mae_pct_median", "mae_pct_p75"]]
+        * 100.0
+    )
+    if plot_frame.empty:
+        _save_placeholder_figure(
+            figures_dir / "successful_fvg_mae_by_stacked_flag.png",
+            "Successful FVG MAE by Stacked Flag",
+        )
+        return
+
+    desired_order = [label for label in ["base_fvg", "stacked_continuation"] if label in plot_frame.index]
+    plot_frame = plot_frame.reindex(desired_order)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#de2d26", "#fd8d3c", "#3182bd"])
+    ax.set_title("Successful FVG MAE by Stacked Flag")
+    ax.set_xlabel("FVG Type")
+    ax.set_ylabel("Percent")
+    ax.tick_params(axis="x", rotation=15)
+    ax.legend(["MAE Mean", "MAE Median", "MAE P75"], loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "successful_fvg_mae_by_stacked_flag.png")
+    plt.close(fig)
+
+
 def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figures_dir: Path) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1389,6 +1472,8 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
             ("mfe_mae_pct_by_alignment_bucket.png", "MFE and MAE Percent by Alignment Bucket"),
             ("mfe_pct_by_minute_block.png", "MFE Percent by Minute Block"),
             ("mfe_pct_by_gap_bucket.png", "MFE Percent by Gap Bucket"),
+            ("successful_fvg_mae_by_alignment_bucket.png", "Successful FVG MAE by Alignment Bucket"),
+            ("successful_fvg_mae_by_stacked_flag.png", "Successful FVG MAE by Stacked Flag"),
         ]:
             _save_placeholder_figure(figures_dir / filename, title)
         return
@@ -1521,6 +1606,8 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
     plot_mfe_mae_pct_by_alignment_bucket(summary, figures_dir)
     plot_mfe_pct_by_minute_block(summary, figures_dir)
     plot_mfe_pct_by_gap_bucket(summary, figures_dir)
+    plot_successful_fvg_mae_by_alignment_bucket(summary, figures_dir)
+    plot_successful_fvg_mae_by_stacked_flag(summary, figures_dir)
 
 
 def run_macro_fvg_study(
