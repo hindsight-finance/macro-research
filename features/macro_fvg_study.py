@@ -17,6 +17,19 @@ NO_NEW_ASSIGNMENTS_AT = "15:59:00"
 STAGE_1_END = "15:54:00"
 STAGE_2_END = "15:58:00"
 FINAL_SCAN_TIME = "15:59:00"
+SUMMARY_COLUMNS = [
+    "summary_scope",
+    "fvg_side",
+    "n_total",
+    "n_confirmable",
+    "hold_rate",
+    "retrace_rate",
+    "untouched_rate",
+    "invalidation_rate",
+    "assigned_minute_hhmm",
+    "assigned_minute_index",
+    "bar2_volume_bucket",
+]
 
 
 def assign_stage(ts: pd.Timestamp) -> str:
@@ -29,7 +42,7 @@ def assign_stage(ts: pd.Timestamp) -> str:
 
 
 def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
-    required = {"DateTime_ET", "Open", "High", "Low", "Close", "window"}
+    required = {"DateTime_ET", "Open", "High", "Low", "Close", "Volume", "window"}
     missing = required.difference(df.columns)
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
@@ -67,9 +80,12 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
                 "assigned_at",
                 "confirmed_at",
                 "assigned_stage",
+                "assigned_minute_hhmm",
+                "assigned_minute_index",
                 "gap_bottom",
                 "gap_top",
                 "gap_size",
+                "bar2_volume",
                 "is_confirmable_by_1559",
             ]
         )
@@ -78,6 +94,12 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     event_rows["assigned_at"] = event_rows["DateTime_ET"]
     event_rows["confirmed_at"] = event_rows["bar3_time"] + pd.Timedelta(minutes=1)
     event_rows["assigned_stage"] = event_rows["assigned_at"].map(assign_stage)
+    event_rows["assigned_minute_hhmm"] = event_rows["assigned_at"].dt.strftime("%H:%M")
+    event_rows["assigned_minute_index"] = (
+        event_rows["assigned_at"].dt.hour * 60
+        + event_rows["assigned_at"].dt.minute
+        - (15 * 60 + 50)
+    )
     event_rows["fvg_side"] = np.where(bullish_mask.loc[event_rows.index], "bullish", "bearish")
     event_rows["gap_bottom"] = np.where(
         bullish_mask.loc[event_rows.index],
@@ -90,6 +112,7 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
         event_rows["bar1_low"],
     )
     event_rows["gap_size"] = event_rows["gap_top"] - event_rows["gap_bottom"]
+    event_rows["bar2_volume"] = event_rows["Volume"]
     event_rows["is_confirmable_by_1559"] = (
         event_rows["confirmed_at"].dt.strftime("%H:%M:%S") <= FINAL_SCAN_TIME
     )
@@ -101,9 +124,12 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
             "assigned_at",
             "confirmed_at",
             "assigned_stage",
+            "assigned_minute_hhmm",
+            "assigned_minute_index",
             "gap_bottom",
             "gap_top",
             "gap_size",
+            "bar2_volume",
             "is_confirmable_by_1559",
         ]
     ].reset_index(drop=True)
@@ -251,6 +277,10 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
     return pd.DataFrame(scanned_rows)
 
 
+def _empty_summary_table() -> pd.DataFrame:
+    return pd.DataFrame(columns=SUMMARY_COLUMNS)
+
+
 def _build_scope_summary(
     events: pd.DataFrame,
     scope_name: str,
@@ -260,18 +290,7 @@ def _build_scope_summary(
     untouched_col: str,
 ) -> pd.DataFrame:
     if events.empty:
-        return pd.DataFrame(
-            columns=[
-                "summary_scope",
-                "fvg_side",
-                "n_total",
-                "n_confirmable",
-                "hold_rate",
-                "retrace_rate",
-                "untouched_rate",
-                "invalidation_rate",
-            ]
-        )
+        return _empty_summary_table()
 
     rows = []
     for fvg_side, group in events.groupby("fvg_side"):
@@ -301,7 +320,79 @@ def _build_scope_summary(
             }
         )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows).reindex(columns=SUMMARY_COLUMNS)
+
+
+def _group_outcome_rates(events: pd.DataFrame, group_cols: list[str], scope_name: str) -> pd.DataFrame:
+    if events.empty:
+        return _empty_summary_table()
+
+    rows = []
+    for group_key, group in events.groupby(group_cols, dropna=False, sort=False):
+        group_values = group_key if isinstance(group_key, tuple) else (group_key,)
+        row = dict(zip(group_cols, group_values))
+        n_total = len(group)
+        n_confirmable = int(group["is_confirmable_by_1559"].sum())
+        if n_confirmable == 0:
+            hold_rate = float("nan")
+            retrace_rate = float("nan")
+            untouched_rate = float("nan")
+            invalidation_rate = float("nan")
+        else:
+            hold_rate = float(group["held_to_1559_close"].sum() / n_confirmable)
+            retrace_rate = float(group["retraced_by_1559"].sum() / n_confirmable)
+            untouched_rate = float(group["untouched_to_1559_close"].sum() / n_confirmable)
+            invalidation_rate = float(group["invalidated_by_1559"].sum() / n_confirmable)
+
+        row.update(
+            {
+                "summary_scope": scope_name,
+                "fvg_side": np.nan,
+                "n_total": int(n_total),
+                "n_confirmable": n_confirmable,
+                "hold_rate": hold_rate,
+                "retrace_rate": retrace_rate,
+                "untouched_rate": untouched_rate,
+                "invalidation_rate": invalidation_rate,
+            }
+        )
+        rows.append(row)
+
+    return pd.DataFrame(rows).reindex(columns=SUMMARY_COLUMNS)
+
+
+def build_creation_minute_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_outcome_rates(
+        events,
+        ["assigned_minute_index", "assigned_minute_hhmm"],
+        "creation_minute",
+    )
+
+
+def _add_bar2_volume_bucket(events: pd.DataFrame, bucket_count: int = 4) -> pd.DataFrame:
+    work = events.copy()
+    if work.empty:
+        work["bar2_volume_bucket"] = pd.Series(dtype="object")
+        return work
+
+    unique_count = work["bar2_volume"].nunique(dropna=False)
+    if unique_count <= 1:
+        work["bar2_volume_bucket"] = "all"
+    else:
+        work["bar2_volume_bucket"] = pd.qcut(
+            work["bar2_volume"],
+            q=min(bucket_count, unique_count),
+            duplicates="drop",
+        ).astype(str)
+    return work
+
+
+def build_bar2_volume_summary(events: pd.DataFrame, bucket_count: int = 4) -> pd.DataFrame:
+    if events.empty:
+        return _empty_summary_table()
+
+    work = _add_bar2_volume_bucket(events, bucket_count=bucket_count)
+    return _group_outcome_rates(work, ["bar2_volume_bucket"], "bar2_volume_bucket")
 
 
 def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
@@ -335,15 +426,20 @@ def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
     ]
     non_empty_frames = [frame for frame in frames if not frame.empty]
     if not non_empty_frames:
-        return _build_scope_summary(
-            pd.DataFrame(),
-            "stage_1",
-            "retraced_by_1559",
-            "invalidated_by_1559",
-            "held_to_1559_close",
-            "untouched_to_1559_close",
-        )
-    return pd.concat(non_empty_frames, ignore_index=True)
+        return _empty_summary_table()
+    return pd.concat(non_empty_frames, ignore_index=True).reindex(columns=SUMMARY_COLUMNS)
+
+
+def build_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
+    frames = [
+        build_stage_summary_tables(events),
+        build_creation_minute_summary(events),
+        build_bar2_volume_summary(events),
+    ]
+    non_empty_frames = [frame for frame in frames if not frame.empty]
+    if not non_empty_frames:
+        return _empty_summary_table()
+    return pd.concat(non_empty_frames, ignore_index=True).reindex(columns=SUMMARY_COLUMNS)
 
 
 def _event_outcome_bucket(event: pd.Series) -> str:
@@ -366,6 +462,121 @@ def _save_placeholder_figure(path: Path, title: str) -> None:
     plt.close(fig)
 
 
+def plot_creation_minute_outcomes(events: pd.DataFrame, figures_dir: Path) -> None:
+    minute_summary = build_creation_minute_summary(events)
+    if minute_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "creation_minute_outcome_bars.png",
+            "Creation Minute Outcome Bars",
+        )
+        return
+
+    plot_frame = (
+        minute_summary.sort_values(["assigned_minute_index", "assigned_minute_hhmm"])
+        .set_index("assigned_minute_hhmm")[["hold_rate", "retrace_rate", "invalidation_rate"]]
+    )
+    fig, ax = plt.subplots(figsize=(9, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#31a354", "#fd8d3c", "#de2d26"])
+    ax.set_title("Creation Minute Outcomes")
+    ax.set_xlabel("Creation Minute")
+    ax.set_ylabel("Rate")
+    ax.set_ylim(0, 1)
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "creation_minute_outcome_bars.png")
+    plt.close(fig)
+
+
+def plot_bar2_volume_bucket_outcomes(events: pd.DataFrame, figures_dir: Path) -> None:
+    volume_summary = build_bar2_volume_summary(events)
+    if volume_summary.empty:
+        _save_placeholder_figure(
+            figures_dir / "bar2_volume_bucket_outcomes.png",
+            "Bar-2 Volume Bucket Outcomes",
+        )
+        return
+
+    plot_frame = volume_summary.set_index("bar2_volume_bucket")[
+        ["hold_rate", "retrace_rate", "invalidation_rate"]
+    ]
+    fig, ax = plt.subplots(figsize=(9, 4))
+    plot_frame.plot(kind="bar", ax=ax, color=["#31a354", "#fd8d3c", "#de2d26"])
+    ax.set_title("Bar-2 Volume Bucket Outcomes")
+    ax.set_xlabel("Bar-2 Volume Bucket")
+    ax.set_ylabel("Rate")
+    ax.set_ylim(0, 1)
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "bar2_volume_bucket_outcomes.png")
+    plt.close(fig)
+
+
+def plot_creation_minute_avg_bar2_volume(events: pd.DataFrame, figures_dir: Path) -> None:
+    if events.empty:
+        _save_placeholder_figure(
+            figures_dir / "creation_minute_avg_bar2_volume.png",
+            "Creation Minute Average Bar-2 Volume",
+        )
+        return
+
+    volume_frame = (
+        events.groupby(["assigned_minute_index", "assigned_minute_hhmm"], sort=False)["bar2_volume"]
+        .mean()
+        .reset_index()
+        .sort_values(["assigned_minute_index", "assigned_minute_hhmm"])
+    )
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.bar(volume_frame["assigned_minute_hhmm"], volume_frame["bar2_volume"], color="#3182bd")
+    ax.set_title("Creation Minute Average Bar-2 Volume")
+    ax.set_xlabel("Creation Minute")
+    ax.set_ylabel("Average Volume")
+    fig.tight_layout()
+    fig.savefig(figures_dir / "creation_minute_avg_bar2_volume.png")
+    plt.close(fig)
+
+
+def plot_creation_minute_volume_heatmap(events: pd.DataFrame, figures_dir: Path) -> None:
+    if events.empty:
+        _save_placeholder_figure(
+            figures_dir / "creation_minute_volume_heatmap.png",
+            "Creation Minute Volume Heatmap",
+        )
+        return
+
+    work = _add_bar2_volume_bucket(events)
+    minute_order = (
+        work[["assigned_minute_index", "assigned_minute_hhmm"]]
+        .drop_duplicates()
+        .sort_values(["assigned_minute_index", "assigned_minute_hhmm"])["assigned_minute_hhmm"]
+    )
+    heatmap_frame = (
+        work.groupby(["assigned_minute_hhmm", "bar2_volume_bucket"], sort=False)
+        .size()
+        .unstack(fill_value=0)
+        .reindex(index=minute_order, fill_value=0)
+    )
+    if heatmap_frame.empty:
+        _save_placeholder_figure(
+            figures_dir / "creation_minute_volume_heatmap.png",
+            "Creation Minute Volume Heatmap",
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    image = ax.imshow(heatmap_frame.to_numpy(), aspect="auto", cmap="YlOrRd")
+    ax.set_title("Creation Minute Volume Heatmap")
+    ax.set_xlabel("Bar-2 Volume Bucket")
+    ax.set_ylabel("Creation Minute")
+    ax.set_xticks(range(len(heatmap_frame.columns)))
+    ax.set_xticklabels(heatmap_frame.columns, rotation=30, ha="right")
+    ax.set_yticks(range(len(heatmap_frame.index)))
+    ax.set_yticklabels(heatmap_frame.index)
+    fig.colorbar(image, ax=ax, shrink=0.8)
+    fig.tight_layout()
+    fig.savefig(figures_dir / "creation_minute_volume_heatmap.png")
+    plt.close(fig)
+
+
 def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figures_dir: Path) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -375,6 +586,10 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
             ("stage1_to_stage2_outcomes.png", "Stage 1 to Stage 2 Outcomes"),
             ("creation_minute_outcome_heatmap.png", "Creation Minute Outcome Heatmap"),
             ("gap_size_vs_outcome.png", "Gap Size vs Outcome"),
+            ("creation_minute_outcome_bars.png", "Creation Minute Outcome Bars"),
+            ("bar2_volume_bucket_outcomes.png", "Bar-2 Volume Bucket Outcomes"),
+            ("creation_minute_avg_bar2_volume.png", "Creation Minute Average Bar-2 Volume"),
+            ("creation_minute_volume_heatmap.png", "Creation Minute Volume Heatmap"),
         ]:
             _save_placeholder_figure(figures_dir / filename, title)
         return
@@ -495,6 +710,11 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
     fig.savefig(figures_dir / "gap_size_vs_outcome.png")
     plt.close(fig)
 
+    plot_creation_minute_outcomes(events, figures_dir)
+    plot_bar2_volume_bucket_outcomes(events, figures_dir)
+    plot_creation_minute_avg_bar2_volume(events, figures_dir)
+    plot_creation_minute_volume_heatmap(events, figures_dir)
+
 
 def run_macro_fvg_study(
     input_path: Path = INPUT_PATH,
@@ -505,7 +725,7 @@ def run_macro_fvg_study(
     bars = pd.read_parquet(input_path)
     events = detect_macro_fvgs(bars)
     events = scan_fvg_outcomes_until_1559_close(events, bars)
-    summary = build_stage_summary_tables(events)
+    summary = build_summary_tables(events)
 
     events_output_path.parent.mkdir(parents=True, exist_ok=True)
     summary_output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,8 @@
 import pandas as pd
 
 from features.macro_fvg_study import (
+    build_bar2_volume_summary,
+    build_creation_minute_summary,
     build_stage_summary_tables,
     detect_macro_fvgs,
     run_macro_fvg_study,
@@ -10,6 +12,10 @@ from features.macro_fvg_study import (
 
 def make_bars(rows):
     df = pd.DataFrame(rows)
+    if "Volume" not in df.columns:
+        df["Volume"] = 0
+    else:
+        df["Volume"] = df["Volume"].fillna(0)
     df["DateTime_ET"] = pd.to_datetime(df["DateTime_ET"])
     return df
 
@@ -52,6 +58,88 @@ def test_detects_bearish_macro_fvg_and_stores_assigned_and_confirmed_times():
     assert event["assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")
     assert event["confirmed_at"] == pd.Timestamp("2025-01-02 15:52:00")
     assert event["assigned_stage"] == "stage_1"
+
+
+def test_detect_macro_fvg_stores_assigned_minute_and_bar2_volume():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:49:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "Volume": 10,
+                "window": "H3PM",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:50:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "Volume": 25,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:51:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "Volume": 40,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    event = events.iloc[0]
+    assert event["assigned_minute_hhmm"] == "15:50"
+    assert event["assigned_minute_index"] == 0
+    assert event["bar2_volume"] == 25
+
+
+def test_detect_macro_fvg_stores_later_assigned_minute_index():
+    bars = make_bars(
+        [
+            {
+                "DateTime_ET": "2025-01-02 15:56:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "Volume": 10,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:57:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "Volume": 55,
+                "window": "MACRO",
+            },
+            {
+                "DateTime_ET": "2025-01-02 15:58:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "Volume": 80,
+                "window": "MACRO",
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    event = events.iloc[0]
+    assert event["assigned_minute_hhmm"] == "15:57"
+    assert event["assigned_minute_index"] == 7
+    assert event["bar2_volume"] == 55
 
 
 def test_excludes_new_detection_assigned_at_1559():
@@ -337,6 +425,96 @@ def test_builds_stage_and_transition_summary_rates():
     assert transition_bear["untouched_rate"] == 1.0
 
 
+def test_builds_creation_minute_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "assigned_minute_index": 0,
+                "assigned_minute_hhmm": "15:50",
+                "bar2_volume": 100,
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": True,
+                "invalidated_by_1559": False,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+            {
+                "assigned_minute_index": 0,
+                "assigned_minute_hhmm": "15:50",
+                "bar2_volume": 200,
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": False,
+                "invalidated_by_1559": True,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+        ]
+    )
+
+    minute_summary = build_creation_minute_summary(events)
+
+    row = minute_summary.iloc[0]
+    assert row["assigned_minute_hhmm"] == "15:50"
+    assert row["assigned_minute_index"] == 0
+    assert row["n_total"] == 2
+    assert row["n_confirmable"] == 2
+    assert row["hold_rate"] == 0.5
+    assert row["invalidation_rate"] == 0.5
+
+
+def test_builds_bar2_volume_bucket_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "assigned_minute_index": 0,
+                "assigned_minute_hhmm": "15:50",
+                "bar2_volume": 100,
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": True,
+                "invalidated_by_1559": False,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+            {
+                "assigned_minute_index": 1,
+                "assigned_minute_hhmm": "15:51",
+                "bar2_volume": 200,
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": False,
+                "invalidated_by_1559": True,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+            {
+                "assigned_minute_index": 2,
+                "assigned_minute_hhmm": "15:52",
+                "bar2_volume": 300,
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": True,
+                "invalidated_by_1559": False,
+                "retraced_by_1559": False,
+                "untouched_to_1559_close": True,
+            },
+            {
+                "assigned_minute_index": 3,
+                "assigned_minute_hhmm": "15:53",
+                "bar2_volume": 400,
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": False,
+                "invalidated_by_1559": True,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+        ]
+    )
+
+    summary = build_bar2_volume_summary(events, bucket_count=2)
+
+    assert "bar2_volume_bucket" in summary.columns
+    assert len(summary) == 2
+    assert summary["n_total"].sum() == 4
+
+
 def test_tracks_stage_1_outcomes_during_stage_2_window():
     bars = make_bars(
         [
@@ -490,3 +668,7 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     assert (figures_dir / "stage1_to_stage2_outcomes.png").exists()
     assert (figures_dir / "creation_minute_outcome_heatmap.png").exists()
     assert (figures_dir / "gap_size_vs_outcome.png").exists()
+    assert (figures_dir / "creation_minute_outcome_bars.png").exists()
+    assert (figures_dir / "bar2_volume_bucket_outcomes.png").exists()
+    assert (figures_dir / "creation_minute_avg_bar2_volume.png").exists()
+    assert (figures_dir / "creation_minute_volume_heatmap.png").exists()
