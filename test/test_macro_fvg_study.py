@@ -1901,3 +1901,5 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     assert (figures_dir / "mfe_pct_by_gap_bucket.png").exists()
     assert (figures_dir / "successful_fvg_mae_by_alignment_bucket.png").exists()
     assert (figures_dir / "successful_fvg_mae_by_stacked_flag.png").exists()
+    assert (figures_dir / "successful_fvg_mfe_by_alignment_bucket.png").exists()
+    assert (figures_dir / "successful_fvg_mfe_by_stacked_flag.png").exists()
