@@ -26,6 +26,9 @@ ALIGNMENT_BUCKET_ORDER = [
 SUMMARY_COLUMNS = [
     "summary_scope",
     "fvg_side",
+    "alignment_bucket",
+    "minute_block",
+    "gap_size_bucket_225",
     "n_total",
     "n_confirmable",
     "hold_rate",
@@ -135,6 +138,8 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
                 "opposite_count",
                 "neutral_count",
                 "alignment_bucket",
+                "minute_block",
+                "gap_size_bucket_225",
             ]
         )
 
@@ -163,6 +168,20 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     event_rows["bar2_volume"] = event_rows["Volume"]
     event_rows["is_confirmable_by_1559"] = (
         event_rows["confirmed_at"].dt.strftime("%H:%M:%S") <= FINAL_SCAN_TIME
+    )
+    event_rows["minute_block"] = np.where(
+        event_rows["assigned_minute_index"] <= 2,
+        "15:50-15:52",
+        np.where(
+            event_rows["assigned_minute_index"] <= 7,
+            "15:53-15:57",
+            "15:58_unconfirmable",
+        ),
+    )
+    event_rows["gap_size_bucket_225"] = np.where(
+        event_rows["gap_size"] < 2.25,
+        "<2.25",
+        ">=2.25",
     )
     event_rows["bar1_direction"] = [
         classify_candle_direction(open_price, close_price)
@@ -214,6 +233,8 @@ def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
             "opposite_count",
             "neutral_count",
             "alignment_bucket",
+            "minute_block",
+            "gap_size_bucket_225",
         ]
     ].reset_index(drop=True)
 
@@ -478,6 +499,26 @@ def build_bar2_volume_summary(events: pd.DataFrame, bucket_count: int = 4) -> pd
     return _group_outcome_rates(work, ["bar2_volume_bucket"], "bar2_volume_bucket")
 
 
+def build_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_outcome_rates(events, ["alignment_bucket"], "alignment_bucket")
+
+
+def build_alignment_bucket_minute_block_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_outcome_rates(
+        events,
+        ["minute_block", "alignment_bucket"],
+        "alignment_bucket_minute_block",
+    )
+
+
+def build_alignment_bucket_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+    return _group_outcome_rates(
+        events,
+        ["gap_size_bucket_225", "alignment_bucket"],
+        "alignment_bucket_gap_bucket",
+    )
+
+
 def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
     stage_1 = events[events["assigned_stage"] == "stage_1"]
     stage_2 = events[events["assigned_stage"] == "stage_2"]
@@ -518,6 +559,9 @@ def build_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
         build_stage_summary_tables(events),
         build_creation_minute_summary(events),
         build_bar2_volume_summary(events),
+        build_alignment_bucket_summary(events),
+        build_alignment_bucket_minute_block_summary(events),
+        build_alignment_bucket_gap_bucket_summary(events),
     ]
     non_empty_frames = [frame for frame in frames if not frame.empty]
     if not non_empty_frames:

@@ -1,3 +1,4 @@
+import features.macro_fvg_study as macro_fvg_study
 import pandas as pd
 
 from features.macro_fvg_study import (
@@ -642,6 +643,118 @@ def test_builds_creation_minute_summary():
     assert row["n_confirmable"] == 2
     assert row["hold_rate"] == 0.5
     assert row["invalidation_rate"] == 0.5
+
+
+def test_builds_alignment_bucket_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "3_aligned",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": ">=2.25",
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": True,
+                "invalidated_by_1559": False,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+            {
+                "alignment_bucket": "3_aligned",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": ">=2.25",
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": False,
+                "invalidated_by_1559": True,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+        ]
+    )
+
+    summary_builder = getattr(macro_fvg_study, "build_alignment_bucket_summary", None)
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    row = summary.iloc[0]
+    assert row["summary_scope"] == "alignment_bucket"
+    assert row["alignment_bucket"] == "3_aligned"
+    assert row["n_total"] == 2
+    assert row["hold_rate"] == 0.5
+    assert row["invalidation_rate"] == 0.5
+
+
+def test_builds_alignment_bucket_minute_block_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "2_aligned_1_opposite",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": "<2.25",
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": True,
+                "invalidated_by_1559": False,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+            {
+                "alignment_bucket": "2_aligned_1_opposite",
+                "minute_block": "15:53-15:57",
+                "gap_size_bucket_225": "<2.25",
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": False,
+                "invalidated_by_1559": True,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+        ]
+    )
+
+    summary_builder = getattr(macro_fvg_study, "build_alignment_bucket_minute_block_summary", None)
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    assert set(summary["minute_block"]) == {"15:50-15:52", "15:53-15:57"}
+    early_row = summary[summary["minute_block"] == "15:50-15:52"].iloc[0]
+    assert early_row["summary_scope"] == "alignment_bucket_minute_block"
+    assert early_row["alignment_bucket"] == "2_aligned_1_opposite"
+    assert early_row["hold_rate"] == 1.0
+
+
+def test_builds_alignment_bucket_gap_bucket_summary():
+    events = pd.DataFrame(
+        [
+            {
+                "alignment_bucket": "contains_neutral",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": "<2.25",
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": True,
+                "invalidated_by_1559": False,
+                "retraced_by_1559": False,
+                "untouched_to_1559_close": True,
+            },
+            {
+                "alignment_bucket": "contains_neutral",
+                "minute_block": "15:50-15:52",
+                "gap_size_bucket_225": ">=2.25",
+                "is_confirmable_by_1559": True,
+                "held_to_1559_close": False,
+                "invalidated_by_1559": True,
+                "retraced_by_1559": True,
+                "untouched_to_1559_close": False,
+            },
+        ]
+    )
+
+    summary_builder = getattr(macro_fvg_study, "build_alignment_bucket_gap_bucket_summary", None)
+    assert summary_builder is not None
+
+    summary = summary_builder(events)
+
+    assert summary["summary_scope"].eq("alignment_bucket_gap_bucket").all()
+    assert set(summary["gap_size_bucket_225"]) == {"<2.25", ">=2.25"}
 
 
 def test_builds_bar2_volume_bucket_summary():
