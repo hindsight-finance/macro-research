@@ -27,7 +27,7 @@ def test_descriptive_target_scores_clean_trend_above_round_trip_chop():
         open_=np.array([100.0, 100.0, 100.0, 100.0]),
         high=np.array([101.0, 101.5, 101.5, 101.0]),
         low=np.array([99.0, 98.5, 98.5, 99.0]),
-        close=np.array([100.0, 101.0, 100.0, 101.0]),
+        close=np.array([100.0, 101.0, 99.8, 100.0]),
     )
 
     assert trend["descriptive_target"] > chop["descriptive_target"]
@@ -43,3 +43,42 @@ def test_descriptive_target_handles_zero_return_window():
 
     assert flat["target_status"] == "ok"
     assert flat["descriptive_target"] == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    "close",
+    [
+        np.array([100.0, 0.0, 101.0]),
+        np.array([100.0, -1.0, 101.0]),
+    ],
+)
+def test_descriptive_target_rejects_non_positive_close(close):
+    with pytest.raises(ValueError, match="close must contain only positive values"):
+        build_descriptive_target(
+            open_=np.array([100.0, 100.0, 100.0]),
+            high=np.array([101.0, 101.0, 101.0]),
+            low=np.array([99.0, 99.0, 99.0]),
+            close=close,
+        )
+
+
+@pytest.mark.parametrize(
+    "open_, high, low, close",
+    [
+        (
+            np.array([100.0, np.nan, 100.0]),
+            np.array([101.0, 101.0, 101.0]),
+            np.array([99.0, 99.0, 99.0]),
+            np.array([100.0, 101.0, 102.0]),
+        ),
+        (
+            np.array([100.0, 100.0, 100.0]),
+            np.array([101.0, np.inf, 101.0]),
+            np.array([99.0, 99.0, 99.0]),
+            np.array([100.0, 101.0, 102.0]),
+        ),
+    ],
+)
+def test_descriptive_target_rejects_non_finite_ohlc(open_, high, low, close):
+    with pytest.raises(ValueError, match="must contain only finite values"):
+        build_descriptive_target(open_=open_, high=high, low=low, close=close)

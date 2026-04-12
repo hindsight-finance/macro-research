@@ -20,6 +20,17 @@ def build_descriptive_target(
     if not (open_arr.shape == high_arr.shape == low_arr.shape == close_arr.shape):
         raise ValueError("open_, high, low, and close must have matching shapes")
 
+    if not (
+        np.isfinite(open_arr).all()
+        and np.isfinite(high_arr).all()
+        and np.isfinite(low_arr).all()
+        and np.isfinite(close_arr).all()
+    ):
+        raise ValueError("open_, high, low, and close must contain only finite values")
+
+    if np.any(close_arr <= 0):
+        raise ValueError("close must contain only positive values")
+
     returns = np.diff(np.log(close_arr))
     n_returns = returns.size
 
