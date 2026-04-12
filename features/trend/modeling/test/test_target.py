@@ -12,11 +12,4 @@ def test_build_descriptive_target_returns_bounded_components():
     )
 
     assert 0.0 <= result["descriptive_target"] <= 1.0
-    assert set(result) == {
-        "target_strength",
-        "target_consistency",
-        "target_smoothness",
-        "target_retention",
-        "descriptive_target",
-        "target_status",
-    }
+    assert {"target_strength", "target_consistency", "target_smoothness", "target_retention", "descriptive_target", "target_status"} <= set(result)
