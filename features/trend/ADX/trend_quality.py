@@ -14,7 +14,12 @@ from typing import Dict, Tuple
 
 from .adx_calc import calculate_adx_from_df, calculate_dx_from_df
 from .di_indicators import calculate_di_from_df
-from .di_persistence import calculate_di_persistence
+from .di_persistence import (
+    calculate_di_persistence,
+    calculate_margin_weighted_persistence,
+    calculate_recency_weighted_persistence,
+    calculate_time_in_control_persistence,
+)
 from .di_crossovers import calculate_crossover_penalty
 
 
@@ -219,6 +224,9 @@ def calculate_trend_quality(
     
     # Persistence over the valid window
     persistence_score = calculate_di_persistence(valid_plus_di, valid_minus_di)
+    persistence_margin_weighted = calculate_margin_weighted_persistence(valid_plus_di, valid_minus_di)
+    persistence_time_in_control = calculate_time_in_control_persistence(valid_plus_di, valid_minus_di)
+    persistence_recency_weighted = calculate_recency_weighted_persistence(valid_plus_di, valid_minus_di)
     
     # Crossover penalty over the valid window
     crossover_score = calculate_crossover_penalty(valid_plus_di, valid_minus_di)
@@ -245,6 +253,9 @@ def calculate_trend_quality(
         'components': {
             'strength': strength_score,
             'persistence': persistence_score,
+            'persistence_margin_weighted': persistence_margin_weighted,
+            'persistence_time_in_control': persistence_time_in_control,
+            'persistence_recency_weighted': persistence_recency_weighted,
             'crossover': crossover_score,
             'strength_raw': valid_strength[-1],  # Keep raw ADX/DX value
             'dominant_di': 'plus' if valid_plus_di[-1] > valid_minus_di[-1] else 'minus'

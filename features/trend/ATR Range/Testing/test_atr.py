@@ -1,5 +1,5 @@
 # features/trend/ATR Range/Testing/test_atr.py
-"""
+r"""
 Test ATR/Range Ratio calculation on NQ 1-minute bars for all time windows.
 
 Tests the analyze_session function with:
@@ -117,7 +117,7 @@ def print_result(result: dict, window_name: str):
     print()
 
 
-def test_single_window(window_name: str, start_time: str, end_time: str):
+def run_single_window(window_name: str, start_time: str, end_time: str):
     """
     Test ATR/Range analysis for a single time window.
     
@@ -327,9 +327,9 @@ if __name__ == "__main__":
     print("Individual Window Tests")
     print("=" * 80)
     
-    test_single_window("1pm-3pm", "13:00", "15:00")
-    test_single_window("3pm-3:50pm", "15:00", "15:50")
-    test_single_window("3:50-4pm", "15:50", "16:00")
+    run_single_window("1pm-3pm", "13:00", "15:00")
+    run_single_window("3pm-3:50pm", "15:00", "15:50")
+    run_single_window("3:50-4pm", "15:50", "16:00")
     
     # Test all windows at once
     print("\n" + "=" * 80)

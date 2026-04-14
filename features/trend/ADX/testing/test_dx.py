@@ -1,130 +1,91 @@
-# features/trend/test.py
-"""
-Test DX calculation on NQ 1-minute bars for 3:50-4:00pm window.
-"""
-import pandas as pd
-import numpy as np
 from pathlib import Path
-import di_indicators
-from adx_calc import calculate_dx_full_from_df
-from di_persistence import calculate_di_persistence, calculate_di_persistence_avg
-from di_crossovers import count_di_crossovers, calculate_crossover_penalty
 
-# Load NQ data
-data_path = Path(__file__).parent / "NQ.csv"
-df = pd.read_csv(data_path, parse_dates=["DateTime_ET"])
+import numpy as np
+import pandas as pd
 
-# Filter for 3:50pm - 4:00pm (15:50 - 16:00)
-df["time"] = df["DateTime_ET"].dt.time
-mask = (df["time"] >= pd.Timestamp("15:45").time()) & (df["time"] < pd.Timestamp("16:00").time())
-bars_1m = df[mask].copy()
-
-print(f"Loaded {len(bars_1m)} bars between 3:50-4:00pm")
-print(f"Date range: {bars_1m['DateTime_ET'].min()} to {bars_1m['DateTime_ET'].max()}")
-print()
-
-# Calculate DX with period=5
-dx_result = calculate_dx_full_from_df(
-    bars_1m,
-    period=5,
-    high_col="High",
-    low_col="Low",
-    close_col="Close"
+from features.trend.ADX.adx_calc import calculate_dx_full_from_df
+from features.trend.ADX.di_crossovers import calculate_crossover_penalty, count_di_crossovers
+from features.trend.ADX.di_persistence import (
+    calculate_di_persistence,
+    calculate_di_persistence_avg,
+    calculate_margin_weighted_persistence,
+    calculate_recency_weighted_persistence,
+    calculate_time_in_control_persistence,
 )
 
-# Combine with original data for display
-result = pd.concat([
-    bars_1m[["DateTime_ET", "Open", "High", "Low", "Close"]].reset_index(drop=True),
-    dx_result.reset_index(drop=True)
-], axis=1)
 
-print("DX Results (period=5):")
-print(result.to_string())
-print()
+def _load_window(start_time: str, end_time: str) -> pd.DataFrame:
+    data_path = Path(__file__).parent / "NQ.csv"
+    df = pd.read_csv(data_path, parse_dates=["DateTime_ET"])
+    times = df["DateTime_ET"].dt.strftime("%H:%M")
+    mask = (times >= start_time) & (times < end_time)
+    return df.loc[mask].reset_index(drop=True)
 
-# Test DI Persistence
-print("=" * 80)
-print("DI Persistence Test")
-print("=" * 80)
 
-# Extract +DI and -DI, filter out NaN values
-plus_di = dx_result["+DI"].values
-minus_di = dx_result["-DI"].values
+def test_calculate_dx_full_from_df_excludes_adx_column():
+    bars = _load_window("15:45", "16:00")
 
-# Find valid (non-NaN) indices
-valid_mask = ~(np.isnan(plus_di) | np.isnan(minus_di))
-plus_di_valid = plus_di[valid_mask]
-minus_di_valid = minus_di[valid_mask]
+    result = calculate_dx_full_from_df(
+        bars,
+        period=5,
+        high_col="High",
+        low_col="Low",
+        close_col="Close",
+    )
 
-if len(plus_di_valid) > 0:
-    print(f"Valid DI bars: {len(plus_di_valid)} out of {len(plus_di)} total bars")
-    print()
-    
-    # Calculate persistence scores
-    persistence_max = calculate_di_persistence(plus_di_valid, minus_di_valid)
-    persistence_avg = calculate_di_persistence_avg(plus_di_valid, minus_di_valid)
-    
-    print(f"Max Consecutive Persistence Score: {persistence_max:.4f}")
-    print(f"  - Interpretation: {persistence_max*100:.1f}% of bars in longest run")
-    print()
-    print(f"Average Run Persistence Score: {persistence_avg:.4f}")
-    print(f"  - Interpretation: Average run length is {persistence_avg*100:.1f}% of total bars")
-    print()
-    
-    # Show dominance breakdown
-    dominant = plus_di_valid > minus_di_valid
-    plus_dominant_count = np.sum(dominant)
-    minus_dominant_count = len(dominant) - plus_dominant_count
-    equal_count = np.sum(plus_di_valid == minus_di_valid)
-    
-    print(f"Dominance Breakdown:")
-    print(f"  +DI dominant: {plus_dominant_count} bars ({plus_dominant_count/len(dominant)*100:.1f}%)")
-    print(f"  -DI dominant: {minus_dominant_count} bars ({minus_dominant_count/len(dominant)*100:.1f}%)")
-    if equal_count > 0:
-        print(f"  Equal: {equal_count} bars ({equal_count/len(dominant)*100:.1f}%)")
-else:
-    print("No valid DI values found (all NaN)")
+    assert len(result) == len(bars)
+    assert {"TR", "+DM", "-DM", "ATR", "+DI", "-DI", "DX"} <= set(result.columns)
+    assert "ADX" not in result.columns
 
-# Test DI Crossovers
-print()
-print("=" * 80)
-print("DI Crossovers Test")
-print("=" * 80)
 
-if len(plus_di_valid) > 0:
-    # Calculate crossover metrics
-    crossover_count = count_di_crossovers(plus_di_valid, minus_di_valid)
-    penalty_default = calculate_crossover_penalty(plus_di_valid, minus_di_valid)
-    penalty_custom = calculate_crossover_penalty(plus_di_valid, minus_di_valid, max_expected=len(plus_di_valid) / 3)
-    
-    print(f"Valid DI bars: {len(plus_di_valid)} out of {len(plus_di)} total bars")
-    print()
-    
-    print(f"Crossover Count: {crossover_count}")
-    print(f"  - Interpretation: Directional leadership flipped {crossover_count} times")
-    print(f"  - Crossover rate: {crossover_count/len(plus_di_valid)*100:.1f}% of bars")
-    print()
-    
-    print(f"Crossover Penalty Score (default max_expected): {penalty_default:.4f}")
-    print(f"  - Interpretation: {penalty_default*100:.1f}% smooth (1.0 = no crossovers, 0.0 = many crossovers)")
-    print()
-    
-    print(f"Crossover Penalty Score (custom max_expected={len(plus_di_valid)/3:.1f}): {penalty_custom:.4f}")
-    print(f"  - Interpretation: {penalty_custom*100:.1f}% smooth with stricter threshold")
-    print()
-    
-    # Show crossover details
-    di_difference = plus_di_valid - minus_di_valid
-    sign_changes = []
-    for i in range(1, len(di_difference)):
-        if (di_difference[i-1] > 0 and di_difference[i] < 0) or \
-           (di_difference[i-1] < 0 and di_difference[i] > 0):
-            sign_changes.append(i)
-    
-    if len(sign_changes) > 0:
-        print(f"Crossover Locations (bar indices in valid array): {sign_changes}")
-        print(f"  - First crossover at bar {sign_changes[0]}, last at bar {sign_changes[-1]}")
-    else:
-        print("No crossovers detected - consistent directional leadership")
-else:
-    print("No valid DI values found (all NaN)")
+def test_dx_helpers_return_bounded_scores_on_valid_di_window():
+    bars = _load_window("15:45", "16:00")
+    result = calculate_dx_full_from_df(
+        bars,
+        period=5,
+        high_col="High",
+        low_col="Low",
+        close_col="Close",
+    )
+
+    plus_di = result["+DI"].to_numpy()
+    minus_di = result["-DI"].to_numpy()
+    valid_mask = ~(np.isnan(plus_di) | np.isnan(minus_di))
+    plus_di = plus_di[valid_mask]
+    minus_di = minus_di[valid_mask]
+
+    assert len(plus_di) > 0
+    assert 0.0 <= calculate_di_persistence(plus_di, minus_di) <= 1.0
+    assert 0.0 <= calculate_di_persistence_avg(plus_di, minus_di) <= 1.0
+    assert 0.0 <= calculate_margin_weighted_persistence(plus_di, minus_di) <= 1.0
+    assert 0.0 <= calculate_time_in_control_persistence(plus_di, minus_di) <= 1.0
+    assert 0.0 <= calculate_recency_weighted_persistence(plus_di, minus_di) <= 1.0
+    assert 0.0 <= calculate_crossover_penalty(plus_di, minus_di) <= 1.0
+    assert count_di_crossovers(plus_di, minus_di) >= 0
+
+
+def test_new_persistence_variants_score_clean_control_above_alternation():
+    plus_clean = np.array([30, 31, 33, 34, 35, 36], dtype=float)
+    minus_clean = np.array([10, 10, 11, 11, 12, 12], dtype=float)
+    plus_chop = np.array([30, 10, 30, 10, 30, 10], dtype=float)
+    minus_chop = np.array([10, 30, 10, 30, 10, 30], dtype=float)
+
+    assert calculate_margin_weighted_persistence(plus_clean, minus_clean) > calculate_margin_weighted_persistence(plus_chop, minus_chop)
+    assert calculate_time_in_control_persistence(plus_clean, minus_clean) > calculate_time_in_control_persistence(plus_chop, minus_chop)
+    assert calculate_recency_weighted_persistence(plus_clean, minus_clean) > calculate_recency_weighted_persistence(plus_chop, minus_chop)
+
+
+def test_margin_weighted_persistence_rewards_stronger_di_margin():
+    plus_strong = np.array([40, 42, 44, 46], dtype=float)
+    minus_strong = np.array([10, 11, 12, 13], dtype=float)
+    plus_weak = np.array([21, 21, 22, 22], dtype=float)
+    minus_weak = np.array([20, 20, 21, 21], dtype=float)
+
+    assert calculate_margin_weighted_persistence(plus_strong, minus_strong) > calculate_margin_weighted_persistence(plus_weak, minus_weak)
+
+
+def test_calculate_di_persistence_uses_margin_weighted_definition():
+    plus_di = np.array([30, 31, 33, 15, 16, 36], dtype=float)
+    minus_di = np.array([10, 10, 11, 25, 28, 12], dtype=float)
+
+    assert calculate_di_persistence(plus_di, minus_di) == calculate_margin_weighted_persistence(plus_di, minus_di)

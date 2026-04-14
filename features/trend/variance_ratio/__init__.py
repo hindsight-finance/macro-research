@@ -1,7 +1,4 @@
-# Trend features package
-
-from .efficiency_ratio import EfficiencyRatioResult, analyze_efficiency_ratio, calculate_efficiency_ratio
-from .variance_ratio import (
+from .vr import (
     VarianceRatioResult,
     analyze_variance_ratio,
     calculate_variance_ratio,
@@ -9,14 +6,8 @@ from .variance_ratio import (
 )
 
 __all__ = [
-    "EfficiencyRatioResult",
     "VarianceRatioResult",
-    "analyze_efficiency_ratio",
     "analyze_variance_ratio",
-    "calculate_efficiency_ratio",
     "calculate_variance_ratio",
     "calculate_variance_ratio_from_returns",
 ]
-
-
-
