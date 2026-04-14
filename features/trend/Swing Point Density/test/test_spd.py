@@ -158,7 +158,7 @@ def print_result(result: dict, window_name: str):
     print()
 
 
-def test_single_window(window_name: str, start_time: str, end_time: str):
+def run_single_window(window_name: str, start_time: str, end_time: str):
     """
     Test swing density analysis for a single time window.
     
@@ -445,9 +445,9 @@ if __name__ == "__main__":
     print("Individual Window Tests")
     print("=" * 80)
     
-    test_single_window("Early Afternoon", "13:00", "15:00")
-    test_single_window("Late Afternoon", "15:00", "15:50")
-    test_single_window("Close", "15:50", "16:00")
+    run_single_window("Early Afternoon", "13:00", "15:00")
+    run_single_window("Late Afternoon", "15:00", "15:50")
+    run_single_window("Close", "15:50", "16:00")
     
     # Test all windows at once
     print("\n" + "=" * 80)
@@ -461,4 +461,3 @@ if __name__ == "__main__":
     print("=" * 80)
     print("Test Suite Complete")
     print("=" * 80)
-

@@ -181,6 +181,48 @@ def detect_session(df: pd.DataFrame, timestamp_col: str = 'timestamp') -> Sessio
     return "auto"
 
 
+def _normalize_resample_rule(rule: str) -> str:
+    """Normalize short bar-size labels like '5m' to pandas-compatible rules."""
+    if rule.endswith('min'):
+        return rule
+    if rule.endswith('m'):
+        return f"{rule[:-1]}min"
+    return rule
+
+
+def _resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """
+    Resample OHLC data to a coarser bar size when timestamps are available.
+
+    If timestamps are unavailable or the requested rule is already 1-minute,
+    return the original bars.
+    """
+    normalized_rule = _normalize_resample_rule(rule)
+    if normalized_rule in {'1min', '1T'} or 'timestamp' not in df.columns:
+        return df.copy()
+
+    bars = df.copy()
+    bars['timestamp'] = pd.to_datetime(bars['timestamp'])
+    return (
+        bars.sort_values('timestamp')
+        .set_index('timestamp')
+        .resample(normalized_rule)
+        .agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'})
+        .dropna()
+        .reset_index()
+    )
+
+
+def _window_end_from_resampled_bars(df: pd.DataFrame, rule: str) -> time:
+    """Return an exclusive end time that includes the final resampled bar."""
+    if df.empty or 'timestamp' not in df.columns:
+        return time(23, 59, 59)
+
+    last_timestamp = pd.to_datetime(df['timestamp']).max()
+    end_timestamp = last_timestamp + pd.to_timedelta(_normalize_resample_rule(rule))
+    return end_timestamp.time()
+
+
 # ============================================================================
 # DYNAMIC WEIGHTING CONSTANTS
 # ============================================================================
@@ -274,11 +316,18 @@ class ADXIndicator(TrendIndicator):
             if session == "auto":
                 session = "1pm-3pm"  # ADX requires explicit session
             mod = _load_package('ADX.trend_quality')
-            result = mod.calculate_trend_quality(df, session)
+            config = mod.WINDOW_CONFIGS[session]
+            bars = _resample_ohlc(df, config['bar_size'])
+            result = mod.calculate_trend_quality(bars, session)
             self._last_result = IndicatorResult(
                 signal=result['quality_score'],
                 raw_value=result['components']['strength_raw'],
-                metadata=result,
+                metadata={
+                    **result,
+                    'input_bars': len(df),
+                    'resampled_bars': len(bars),
+                    'bar_size': config['bar_size'],
+                },
             )
         except Exception as e:
             self._last_result = IndicatorResult(signal=0.5, error=str(e))
@@ -313,16 +362,10 @@ class ATRRangeIndicator(TrendIndicator):
         try:
             mod = _load_module('atr', _MODULE_DIR / 'ATR Range' / 'atr.py')
             atr_session = _ATR_SESSION_MAP.get(session, '1pm-3pm')
+            bar_size = mod.SESSIONS[atr_session]['bar_size']
+            bars = _resample_ohlc(df, bar_size)
 
-            # Resample to 5-min OHLC to match the module's design assumptions
-            if 'timestamp' in df.columns:
-                df_5m = df.set_index('timestamp').resample('5min').agg({
-                    'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-                }).dropna()
-            else:
-                df_5m = df  # fallback: use as-is if no timestamp
-
-            result = mod.analyze_session(df_5m, atr_session)
+            result = mod.analyze_session(bars, atr_session)
             raw_ratio = result['raw_ratio']
             if raw_ratio is None:
                 self._last_result = IndicatorResult(
@@ -333,7 +376,12 @@ class ATRRangeIndicator(TrendIndicator):
                 self._last_result = IndicatorResult(
                     signal=signal,
                     raw_value=raw_ratio,
-                    metadata=result,
+                    metadata={
+                        **result,
+                        'input_bars': len(df),
+                        'resampled_bars': len(bars),
+                        'bar_size': bar_size,
+                    },
                 )
         except Exception as e:
             self._last_result = IndicatorResult(signal=0.5, error=str(e))
@@ -572,31 +620,34 @@ class SPDIndicator(TrendIndicator):
         """
         try:
             mod = _load_module('spd', _MODULE_DIR / 'Swing Point Density' / 'spd.py')
+            resample_rule = self.config.get('bar_size', '5min')
 
-            # Resample to 5-min to reduce noise-driven swing detection
-            if 'timestamp' in df.columns:
-                df_5m = df.set_index('timestamp').resample('5min').agg({
-                    'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-                }).dropna().reset_index()
-                times = pd.to_datetime(df_5m['timestamp']).dt.time
+            bars_df = _resample_ohlc(df, resample_rule)
+            if 'timestamp' in bars_df.columns and not bars_df.empty:
+                times = pd.to_datetime(bars_df['timestamp']).dt.time
                 start_time = times.min()
-                end_time = times.max()
+                end_time = _window_end_from_resampled_bars(bars_df, resample_rule)
             else:
-                df_5m = df.copy()
                 start_time = time(0, 0)
-                end_time = time(23, 59)
+                end_time = time(23, 59, 59)
 
-            bars = df_5m.to_dict('records')
+            bars = bars_df.to_dict('records')
             result = mod.get_swing_density(bars, start_time, end_time)
-            count = result['count']
-            n_bars = result['bars_analyzed']
-            max_expected_swings = max(n_bars / 2, 1)
-
-            signal = float(np.clip(1.0 - count / max_expected_swings, 0.0, 1.0))
+            signal = {
+                'trending': 1.0,
+                'mixed': 0.5,
+                'chop': 0.0,
+                'insufficient_data': 0.5,
+            }.get(result['classification'], 0.5)
             self._last_result = IndicatorResult(
                 signal=signal,
-                raw_value=float(count),
-                metadata=result,
+                raw_value=float(result['count']),
+                metadata={
+                    **result,
+                    'input_bars': len(df),
+                    'resampled_bars': len(bars_df),
+                    'bar_size': resample_rule,
+                },
             )
         except Exception as e:
             self._last_result = IndicatorResult(signal=0.5, error=str(e))
@@ -809,8 +860,8 @@ class StateDetector:
                 # Special handling for DRA (needs reference_bars)
                 if name == 'dra':
                     result = indicator.calculate(df, reference_bars=reference_bars)
-                # Special handling for ADX and SPD (need session)
-                elif name in ['adx', 'spd']:
+                # Special handling for session-aware indicators
+                elif name in ['adx', 'atr_range', 'spd']:
                     result = indicator.calculate(df, session=session)
                 else:
                     result = indicator.calculate(df)
@@ -839,7 +890,8 @@ class StateDetector:
 
         # ---- Phase 2: Dynamic weight adjustment ----
         # Start with static weights, excluding failed indicators
-        active_weights = self._reweight(self.weights, failed_indicators)
+        inactive_indicators = failed_indicators | (set(self.weights.keys()) - self.enabled_indicators)
+        active_weights = self._reweight(self.weights, inactive_indicators)
         dynamic_info = None
 
         if use_dynamic and 'lag' in indicator_results and indicator_results['lag'].error is None:
