@@ -39,3 +39,41 @@ def test_build_parser_accepts_modeling_commands():
     assert build_args.command == "build-table"
     assert run_args.command == "run-experiments"
     assert summary_args.command == "summarize"
+
+
+def test_build_parser_accepts_post_adx_ablation_group():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-experiments",
+            "--table-path",
+            "table.parquet",
+            "--session-name",
+            "1pm-3pm",
+            "--output-dir",
+            "outputs/trend_modeling/experiments",
+            "--experiment-group",
+            "post_adx_ablation",
+        ]
+    )
+
+    assert args.experiment_group == "post_adx_ablation"
+
+
+def test_build_parser_accepts_post_adx_persistence_rewrite_group():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-experiments",
+            "--table-path",
+            "table.parquet",
+            "--session-name",
+            "1pm-3pm",
+            "--output-dir",
+            "outputs/trend_modeling/experiments",
+            "--experiment-group",
+            "post_adx_persistence_rewrites",
+        ]
+    )
+
+    assert args.experiment_group == "post_adx_persistence_rewrites"

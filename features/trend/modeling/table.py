@@ -67,6 +67,9 @@ def _compute_adx(window_bars: pd.DataFrame, session_name: str) -> dict:
         "adx_quality": float(result.signal),
         "adx_strength": float(components["strength"]),
         "adx_persistence": float(components["persistence"]),
+        "adx_persistence_margin": float(components["persistence_margin_weighted"]),
+        "adx_persistence_control": float(components["persistence_time_in_control"]),
+        "adx_persistence_recency": float(components["persistence_recency_weighted"]),
         "adx_crossover": float(components["crossover"]),
     }
 
@@ -134,6 +137,9 @@ def _build_session_row(window_bars: pd.DataFrame, instrument: str, session_name:
         row["adx_quality"] = np.nan
         row["adx_strength"] = np.nan
         row["adx_persistence"] = np.nan
+        row["adx_persistence_margin"] = np.nan
+        row["adx_persistence_control"] = np.nan
+        row["adx_persistence_recency"] = np.nan
         row["adx_crossover"] = np.nan
         feature_errors.append(f"adx:{exc}")
 

@@ -6,7 +6,13 @@ from typing import Sequence
 
 import pandas as pd
 
-from features.trend.modeling.registry import build_experiment_registry, build_ridge_alpha_sweep, filter_table_for_era
+from features.trend.modeling.registry import (
+    build_experiment_registry,
+    build_post_adx_ablation_registry,
+    build_post_adx_persistence_rewrite_registry,
+    build_ridge_alpha_sweep,
+    filter_table_for_era,
+)
 from features.trend.modeling.table import DEFAULT_SESSION_NAMES, build_modeling_table, write_modeling_table_cache
 from features.trend.modeling.walkforward import run_walkforward_experiment, summarize_experiments
 
@@ -34,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--experiment-group",
         default="representation_sweep",
-        choices=("representation_sweep", "ridge_alpha_sweep"),
+        choices=("representation_sweep", "ridge_alpha_sweep", "post_adx_ablation", "post_adx_persistence_rewrites"),
     )
     run_parser.add_argument("--ridge-alpha", type=float, default=1.0)
     run_parser.add_argument("--target-column", default="descriptive_target")
@@ -64,6 +70,10 @@ def _build_table_command(args: argparse.Namespace) -> int:
 def _select_experiment_specs(args: argparse.Namespace):
     if args.experiment_group == "ridge_alpha_sweep":
         return build_ridge_alpha_sweep(session_name=args.session_name)
+    if args.experiment_group == "post_adx_ablation":
+        return build_post_adx_ablation_registry(session_name=args.session_name, ridge_alpha=args.ridge_alpha)
+    if args.experiment_group == "post_adx_persistence_rewrites":
+        return build_post_adx_persistence_rewrite_registry(session_name=args.session_name, ridge_alpha=args.ridge_alpha)
     return build_experiment_registry(session_name=args.session_name, ridge_alpha=args.ridge_alpha)
 
 

@@ -1,119 +1,125 @@
 import numpy as np
 
 
-def calculate_di_persistence(plus_di: np.array, minus_di: np.array) -> float:
-    """
-    Calculate what percentage of bars show consistent DI dominance.
-    
-    Args:
-        plus_di: Array of +DI values
-        minus_di: Array of -DI values
-        
-    Returns:
-        Persistence score between 0 and 1
-        1.0 = same DI led entire period
-        0.0 = perfect alternation
-    """
-    if len(plus_di) != len(minus_di):
-        raise ValueError("DI arrays must be same length")
-    
-    if len(plus_di) < 2:
-        return 0.0
-    
-    # Determine which DI is dominant for each bar
-    # True = +DI dominant, False = -DI dominant
-    # Handle equality: maintain previous state (forward-fill)
-    dominant_di = np.zeros(len(plus_di), dtype=bool)
-    
-    # Set initial value: if equal, default to +DI (True)
-    dominant_di[0] = plus_di[0] >= minus_di[0]
-    
-    # Forward-fill equal values with previous state
-    for i in range(1, len(plus_di)):
-        if plus_di[i] > minus_di[i]:
-            dominant_di[i] = True
-        elif plus_di[i] < minus_di[i]:
-            dominant_di[i] = False
-        else:
-            # Equal case: maintain previous bar's dominance
-            dominant_di[i] = dominant_di[i-1]
-    
-    # Count consecutive bars where same DI leads
-    max_consecutive = 1
-    current_consecutive = 1
-    
-    for i in range(1, len(dominant_di)):
-        if dominant_di[i] == dominant_di[i-1]:
-            current_consecutive += 1
-            max_consecutive = max(max_consecutive, current_consecutive)
-        else:
-            current_consecutive = 1
-    
-    # Normalize: max_consecutive / total_bars
-    persistence_score = max_consecutive / len(dominant_di)
-    
-    return persistence_score
+def _validate_di_arrays(plus_di: np.ndarray, minus_di: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    plus_arr = np.asarray(plus_di, dtype=float)
+    minus_arr = np.asarray(minus_di, dtype=float)
 
-def calculate_di_persistence_avg(plus_di: np.array, minus_di: np.array) -> float:
+    if len(plus_arr) != len(minus_arr):
+        raise ValueError("DI arrays must be same length")
+
+    return plus_arr, minus_arr
+
+
+def _dominance_sign_and_margin(plus_di: np.ndarray, minus_di: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    plus_arr, minus_arr = _validate_di_arrays(plus_di, minus_di)
+    if len(plus_arr) == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    signs = np.zeros(len(plus_arr), dtype=float)
+    signs[0] = 1.0 if plus_arr[0] >= minus_arr[0] else -1.0
+
+    for i in range(1, len(plus_arr)):
+        if plus_arr[i] > minus_arr[i]:
+            signs[i] = 1.0
+        elif plus_arr[i] < minus_arr[i]:
+            signs[i] = -1.0
+        else:
+            signs[i] = signs[i - 1]
+
+    margins = np.abs(plus_arr - minus_arr) / (plus_arr + minus_arr + 1e-12)
+    margins = np.clip(margins, 0.0, 1.0)
+    return signs, margins
+
+
+def calculate_di_persistence(plus_di: np.ndarray, minus_di: np.ndarray) -> float:
+    """
+    Default persistence definition.
+
+    Returns:
+        Margin-weighted persistence score between 0 and 1.
+    """
+    return calculate_margin_weighted_persistence(plus_di, minus_di)
+
+
+def calculate_di_persistence_avg(plus_di: np.ndarray, minus_di: np.ndarray) -> float:
     """
     Calculate average length of consecutive dominance periods.
     More sensitive to multiple trend attempts.
-    
-    Args:
-        plus_di: Array of +DI values
-        minus_di: Array of -DI values
-        
-    Returns:
-        Persistence score between 0 and 1 based on average run length
     """
-    if len(plus_di) != len(minus_di):
-        raise ValueError("DI arrays must be same length")
-    
-    if len(plus_di) < 2:
+    signs, _ = _dominance_sign_and_margin(plus_di, minus_di)
+    if len(signs) < 2:
         return 0.0
-    
-    # Determine which DI is dominant for each bar
-    # Handle equality: maintain previous state (forward-fill)
-    dominant_di = np.zeros(len(plus_di), dtype=bool)
-    
-    # Set initial value: if equal, default to +DI (True)
-    dominant_di[0] = plus_di[0] >= minus_di[0]
-    
-    # Forward-fill equal values with previous state
-    for i in range(1, len(plus_di)):
-        if plus_di[i] > minus_di[i]:
-            dominant_di[i] = True
-        elif plus_di[i] < minus_di[i]:
-            dominant_di[i] = False
-        else:
-            # Equal case: maintain previous bar's dominance
-            dominant_di[i] = dominant_di[i-1]
-    
+
     runs = []
     current_run = 1
-    
-    for i in range(1, len(dominant_di)):
-        if dominant_di[i] == dominant_di[i-1]:
+
+    for i in range(1, len(signs)):
+        if signs[i] == signs[i - 1]:
             current_run += 1
         else:
             runs.append(current_run)
             current_run = 1
-    
-    runs.append(current_run)  # Add final run
-    
-    # Average run length divided by total bars
+
+    runs.append(current_run)
     avg_run = np.mean(runs)
-    persistence_score = avg_run / len(dominant_di)
-    
-    return persistence_score
+    return avg_run / len(signs)
 
 
-# Example usage:
-# Bars:  [1,  2,  3,  4,  5,  6,  7,  8,  9, 10]
-# +DI:   [20, 25, 30, 15, 10, 12, 35, 40, 38, 36]
-# -DI:   [15, 10, 12, 25, 28, 30, 20, 15, 18, 20]
-#
-# Dominant: [+, +, +, -, -, -, +, +, +, +]
-#
-# Max consecutive = 4 bars (+DI at end)
-# Persistence score = 4/10 = 0.4
+def calculate_margin_weighted_persistence(plus_di: np.ndarray, minus_di: np.ndarray) -> float:
+    """
+    Reward long dominance runs, scaled by how decisively the winning DI leads.
+    """
+    signs, margins = _dominance_sign_and_margin(plus_di, minus_di)
+    n = len(signs)
+    if n < 2:
+        return 0.0
+
+    score = 0.0
+    run_start = 0
+
+    for i in range(1, n + 1):
+        if i == n or signs[i] != signs[run_start]:
+            run_end = i
+            run_length = run_end - run_start
+            run_share = run_length / n
+            run_margin = float(np.mean(margins[run_start:run_end]))
+            score += (run_share ** 2) * run_margin
+            run_start = i
+
+    return float(np.clip(score, 0.0, 1.0))
+
+
+def calculate_time_in_control_persistence(plus_di: np.ndarray, minus_di: np.ndarray) -> float:
+    """
+    Measure how strongly one side controlled the full window on average.
+    """
+    signs, margins = _dominance_sign_and_margin(plus_di, minus_di)
+    if len(signs) < 2:
+        return 0.0
+
+    control = np.abs(np.mean(signs * margins))
+    return float(np.clip(control, 0.0, 1.0))
+
+
+def calculate_recency_weighted_persistence(
+    plus_di: np.ndarray,
+    minus_di: np.ndarray,
+    alpha: float = 0.35,
+) -> float:
+    """
+    Measure how persistently one side controls the most recent bars.
+    """
+    signs, margins = _dominance_sign_and_margin(plus_di, minus_di)
+    if len(signs) < 2:
+        return 0.0
+
+    if not 0.0 < alpha <= 1.0:
+        raise ValueError("alpha must be between 0 and 1")
+
+    state = signs * margins
+    ema = float(state[0])
+    for value in state[1:]:
+        ema = alpha * float(value) + (1.0 - alpha) * ema
+
+    return float(np.clip(abs(ema), 0.0, 1.0))

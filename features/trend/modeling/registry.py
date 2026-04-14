@@ -16,11 +16,85 @@ ADX_PARTS_FEATURE_COLUMNS = (
     "er",
     "log_vr",
 )
+ADX_PARTS_MINUS_PERSISTENCE_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_crossover",
+    "irr",
+    "er",
+    "log_vr",
+)
+ADX_PARTS_MINUS_CROSSOVER_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_persistence",
+    "irr",
+    "er",
+    "log_vr",
+)
+ADX_PARTS_MINUS_LOG_VR_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_persistence",
+    "adx_crossover",
+    "irr",
+    "er",
+)
+ADX_PARTS_MINUS_IRR_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_persistence",
+    "adx_crossover",
+    "er",
+    "log_vr",
+)
+ADX_PARTS_MINUS_PERSISTENCE_LOG_VR_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_crossover",
+    "irr",
+    "er",
+)
+ADX_PARTS_PERSISTENCE_MARGIN_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_persistence_margin",
+    "adx_crossover",
+    "irr",
+    "er",
+    "log_vr",
+)
+ADX_PARTS_PERSISTENCE_CONTROL_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_persistence_control",
+    "adx_crossover",
+    "irr",
+    "er",
+    "log_vr",
+)
+ADX_PARTS_PERSISTENCE_RECENCY_FEATURE_COLUMNS = (
+    "mss",
+    "adx_strength",
+    "adx_persistence_recency",
+    "adx_crossover",
+    "irr",
+    "er",
+    "log_vr",
+)
 
 FEATURE_SETS = {
     "core5": CORE5_FEATURE_COLUMNS,
     "core5_dra": CORE5_DRA_FEATURE_COLUMNS,
     "adx_parts": ADX_PARTS_FEATURE_COLUMNS,
+    "adx_parts_minus_persistence": ADX_PARTS_MINUS_PERSISTENCE_FEATURE_COLUMNS,
+    "adx_parts_minus_crossover": ADX_PARTS_MINUS_CROSSOVER_FEATURE_COLUMNS,
+    "adx_parts_minus_log_vr": ADX_PARTS_MINUS_LOG_VR_FEATURE_COLUMNS,
+    "adx_parts_minus_irr": ADX_PARTS_MINUS_IRR_FEATURE_COLUMNS,
+    "adx_parts_minus_persistence_log_vr": ADX_PARTS_MINUS_PERSISTENCE_LOG_VR_FEATURE_COLUMNS,
+    "adx_parts_persistence_margin": ADX_PARTS_PERSISTENCE_MARGIN_FEATURE_COLUMNS,
+    "adx_parts_persistence_control": ADX_PARTS_PERSISTENCE_CONTROL_FEATURE_COLUMNS,
+    "adx_parts_persistence_recency": ADX_PARTS_PERSISTENCE_RECENCY_FEATURE_COLUMNS,
 }
 
 RIDGE_ALPHAS = [0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
@@ -62,6 +136,116 @@ def _representation_specs(session_name: str, ridge_alpha: float) -> list[Experim
 
 def build_experiment_registry(session_name: str, ridge_alpha: float = 1.0) -> list[ExperimentSpec]:
     return _representation_specs(session_name=session_name, ridge_alpha=ridge_alpha)
+
+
+def build_post_adx_ablation_registry(session_name: str, ridge_alpha: float = 1.0) -> list[ExperimentSpec]:
+    return [
+        ExperimentSpec(
+            "EXP20_post_adx_parts_base",
+            "post_adx_ablation",
+            session_name,
+            "post_covid",
+            "adx_parts",
+            ADX_PARTS_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP21_post_adx_parts_minus_persistence",
+            "post_adx_ablation",
+            session_name,
+            "post_covid",
+            "adx_parts_minus_persistence",
+            ADX_PARTS_MINUS_PERSISTENCE_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP22_post_adx_parts_minus_crossover",
+            "post_adx_ablation",
+            session_name,
+            "post_covid",
+            "adx_parts_minus_crossover",
+            ADX_PARTS_MINUS_CROSSOVER_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP23_post_adx_parts_minus_log_vr",
+            "post_adx_ablation",
+            session_name,
+            "post_covid",
+            "adx_parts_minus_log_vr",
+            ADX_PARTS_MINUS_LOG_VR_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP24_post_adx_parts_minus_irr",
+            "post_adx_ablation",
+            session_name,
+            "post_covid",
+            "adx_parts_minus_irr",
+            ADX_PARTS_MINUS_IRR_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP25_post_adx_parts_minus_persistence_log_vr",
+            "post_adx_ablation",
+            session_name,
+            "post_covid",
+            "adx_parts_minus_persistence_log_vr",
+            ADX_PARTS_MINUS_PERSISTENCE_LOG_VR_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+    ]
+
+
+def build_post_adx_persistence_rewrite_registry(session_name: str, ridge_alpha: float = 1.0) -> list[ExperimentSpec]:
+    return [
+        ExperimentSpec(
+            "EXP30_post_adx_persistence_base",
+            "post_adx_persistence_rewrites",
+            session_name,
+            "post_covid",
+            "adx_parts",
+            ADX_PARTS_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP31_post_adx_persistence_margin",
+            "post_adx_persistence_rewrites",
+            session_name,
+            "post_covid",
+            "adx_parts_persistence_margin",
+            ADX_PARTS_PERSISTENCE_MARGIN_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP32_post_adx_persistence_control",
+            "post_adx_persistence_rewrites",
+            session_name,
+            "post_covid",
+            "adx_parts_persistence_control",
+            ADX_PARTS_PERSISTENCE_CONTROL_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP33_post_adx_persistence_recency",
+            "post_adx_persistence_rewrites",
+            session_name,
+            "post_covid",
+            "adx_parts_persistence_recency",
+            ADX_PARTS_PERSISTENCE_RECENCY_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+    ]
 
 
 def build_ridge_alpha_sweep(session_name: str) -> list[ExperimentSpec]:
