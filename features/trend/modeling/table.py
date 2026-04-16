@@ -8,7 +8,12 @@ import numpy as np
 import pandas as pd
 
 from features.trend.efficiency_ratio import analyze_efficiency_ratio
-from features.trend.modeling.target import build_descriptive_target
+from features.trend.modeling.target import (
+    build_containment_expansion_features,
+    build_containment_features,
+    build_containment_target,
+    build_descriptive_target,
+)
 from features.trend.state_detector import ADXIndicator, DRAIndicator, IRRIndicator, MSSIndicator
 from features.trend.variance_ratio import analyze_variance_ratio
 
@@ -34,6 +39,7 @@ def _normalize_input_bars(bars: pd.DataFrame) -> pd.DataFrame:
             "high": bars["high"] if "high" in bars.columns else bars["High"],
             "low": bars["low"] if "low" in bars.columns else bars["Low"],
             "close": bars["close"] if "close" in bars.columns else bars["Close"],
+            "volume": bars["volume"] if "volume" in bars.columns else bars["Volume"],
         }
     )
 
@@ -191,6 +197,70 @@ def _build_session_row(window_bars: pd.DataFrame, instrument: str, session_name:
                 "target_status": f"error:{exc}",
             }
         )
+
+    try:
+        row.update(
+            build_containment_target(
+                open_=window_bars["open"].to_numpy(),
+                high=window_bars["high"].to_numpy(),
+                low=window_bars["low"].to_numpy(),
+                close=window_bars["close"].to_numpy(),
+            )
+        )
+    except Exception as exc:
+        row.update(
+            {
+                "containment_displacement": np.nan,
+                "containment_edge_balance": np.nan,
+                "containment_inside_share": np.nan,
+                "containment_path_efficiency": np.nan,
+                "containment_target": np.nan,
+                "containment_status": f"error:{exc}",
+            }
+        )
+
+    try:
+        row.update(
+            build_containment_features(
+                open_=window_bars["open"].to_numpy(),
+                high=window_bars["high"].to_numpy(),
+                low=window_bars["low"].to_numpy(),
+                close=window_bars["close"].to_numpy(),
+            )
+        )
+    except Exception as exc:
+        row.update(
+            {
+                "containment_overshoot_ratio": np.nan,
+                "containment_range_stability": np.nan,
+                "containment_mid_cross_count": np.nan,
+                "containment_swing_symmetry": np.nan,
+            }
+        )
+        feature_errors.append(f"containment_v2:{exc}")
+
+    try:
+        row.update(
+            build_containment_expansion_features(
+                open_=window_bars["open"].to_numpy(),
+                high=window_bars["high"].to_numpy(),
+                low=window_bars["low"].to_numpy(),
+                close=window_bars["close"].to_numpy(),
+                volume=window_bars["volume"].to_numpy(),
+                session_name=session_name,
+            )
+        )
+    except Exception as exc:
+        row.update(
+            {
+                "containment_ib_extension_ratio": np.nan,
+                "containment_ib_asymmetry": np.nan,
+                "containment_bandwidth_squeeze": np.nan,
+                "containment_vwap_acceptance": np.nan,
+                "containment_excess_rejection": np.nan,
+            }
+        )
+        feature_errors.append(f"containment_v3:{exc}")
 
     row["feature_status"] = "ok" if not feature_errors else ";".join(feature_errors)
     return row
