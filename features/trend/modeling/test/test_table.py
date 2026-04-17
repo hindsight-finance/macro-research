@@ -87,6 +87,14 @@ def test_build_modeling_table_emits_one_row_per_date_and_session(tmp_path: Path)
         "containment_target",
         "containment_status",
         "descriptive_target",
+        "trend_score",
+        "containment_score",
+        "chop_flip_rate",
+        "chop_path_waste",
+        "chop_outside_share",
+        "chop_instability",
+        "chop_score",
+        "chop_status",
         "feature_status",
         "target_status",
     } <= set(table.columns)
@@ -107,6 +115,18 @@ def test_build_modeling_table_emits_one_row_per_date_and_session(tmp_path: Path)
             "containment_excess_rejection",
         ]
     ].notna().all().all()
+    assert table["trend_score"].equals(table["descriptive_target"])
+    assert table["containment_score"].equals(table["containment_target"])
+    assert table[
+        [
+            "chop_flip_rate",
+            "chop_path_waste",
+            "chop_outside_share",
+            "chop_instability",
+            "chop_score",
+        ]
+    ].notna().all().all()
+    assert set(table["chop_status"]) == {"ok"}
     assert set(table["session_name"]) == {"1pm-3pm"}
 
 

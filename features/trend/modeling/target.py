@@ -201,6 +201,71 @@ def build_containment_target(
     }
 
 
+def build_chop_target(
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+) -> dict:
+    _, high_arr, low_arr, close_arr = _coerce_ohlc_arrays(
+        open_=open_,
+        high=high,
+        low=low,
+        close=close,
+    )
+
+    realized_range, close_pos = _compute_realized_range_and_close_pos(
+        high_arr=high_arr,
+        low_arr=low_arr,
+        close_arr=close_arr,
+    )
+
+    returns = np.diff(np.log(close_arr))
+    nonzero_returns = returns[returns != 0]
+    sign_changes = (
+        np.count_nonzero(np.sign(nonzero_returns[1:]) != np.sign(nonzero_returns[:-1]))
+        if nonzero_returns.size > 1
+        else 0
+    )
+    chop_flip_rate = float(sign_changes / max(nonzero_returns.size - 1, 1))
+
+    path_length = float(np.sum(np.abs(np.diff(close_arr))))
+    chop_path_waste = float(np.clip(path_length / (realized_range + 1e-12), 0.0, 4.0) / 4.0)
+
+    chop_outside_share = float(np.mean((close_pos < 0.05) | (close_pos > 0.95)))
+
+    block_indexes = [
+        block
+        for block in np.array_split(np.arange(close_arr.size), min(4, close_arr.size))
+        if block.size
+    ]
+    block_ranges = [
+        float(high_arr[idx].max() - low_arr[idx].min()) / (realized_range + 1e-12)
+        for idx in block_indexes
+    ]
+    chop_instability = float(np.clip(np.std(block_ranges, ddof=0), 0.0, 1.0))
+
+    chop_score = float(
+        np.clip(
+            0.35 * chop_path_waste
+            + 0.30 * chop_flip_rate
+            + 0.20 * chop_outside_share
+            + 0.15 * chop_instability,
+            0.0,
+            1.0,
+        )
+    )
+
+    return {
+        "chop_flip_rate": chop_flip_rate,
+        "chop_path_waste": chop_path_waste,
+        "chop_outside_share": chop_outside_share,
+        "chop_instability": chop_instability,
+        "chop_score": chop_score,
+        "chop_status": "ok",
+    }
+
+
 def build_containment_features(
     open_: np.ndarray,
     high: np.ndarray,

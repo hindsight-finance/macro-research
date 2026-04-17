@@ -9,6 +9,7 @@ import pandas as pd
 
 from features.trend.efficiency_ratio import analyze_efficiency_ratio
 from features.trend.modeling.target import (
+    build_chop_target,
     build_containment_expansion_features,
     build_containment_features,
     build_containment_target,
@@ -197,6 +198,7 @@ def _build_session_row(window_bars: pd.DataFrame, instrument: str, session_name:
                 "target_status": f"error:{exc}",
             }
         )
+    row["trend_score"] = row["descriptive_target"]
 
     try:
         row.update(
@@ -216,6 +218,28 @@ def _build_session_row(window_bars: pd.DataFrame, instrument: str, session_name:
                 "containment_path_efficiency": np.nan,
                 "containment_target": np.nan,
                 "containment_status": f"error:{exc}",
+            }
+        )
+    row["containment_score"] = row["containment_target"]
+
+    try:
+        row.update(
+            build_chop_target(
+                open_=window_bars["open"].to_numpy(),
+                high=window_bars["high"].to_numpy(),
+                low=window_bars["low"].to_numpy(),
+                close=window_bars["close"].to_numpy(),
+            )
+        )
+    except Exception as exc:
+        row.update(
+            {
+                "chop_flip_rate": np.nan,
+                "chop_path_waste": np.nan,
+                "chop_outside_share": np.nan,
+                "chop_instability": np.nan,
+                "chop_score": np.nan,
+                "chop_status": f"error:{exc}",
             }
         )
 
