@@ -7,6 +7,13 @@ import pandas as pd
 
 CORE5_FEATURE_COLUMNS = ("mss", "adx_quality", "irr", "er", "log_vr")
 CORE5_DRA_FEATURE_COLUMNS = ("mss", "adx_quality", "irr", "er", "log_vr", "dra")
+CONTAINMENT_V2_FEATURE_COLUMNS = (
+    "containment_overshoot_ratio",
+    "containment_range_stability",
+    "containment_mid_cross_count",
+    "containment_swing_symmetry",
+)
+CORE5_DRA_CONTAINMENT_V2_FEATURE_COLUMNS = CORE5_DRA_FEATURE_COLUMNS + CONTAINMENT_V2_FEATURE_COLUMNS
 ADX_PARTS_FEATURE_COLUMNS = (
     "mss",
     "adx_strength",
@@ -16,6 +23,7 @@ ADX_PARTS_FEATURE_COLUMNS = (
     "er",
     "log_vr",
 )
+ADX_PARTS_CONTAINMENT_V2_FEATURE_COLUMNS = ADX_PARTS_FEATURE_COLUMNS + CONTAINMENT_V2_FEATURE_COLUMNS
 ADX_PARTS_MINUS_PERSISTENCE_FEATURE_COLUMNS = (
     "mss",
     "adx_strength",
@@ -86,7 +94,9 @@ ADX_PARTS_PERSISTENCE_RECENCY_FEATURE_COLUMNS = (
 FEATURE_SETS = {
     "core5": CORE5_FEATURE_COLUMNS,
     "core5_dra": CORE5_DRA_FEATURE_COLUMNS,
+    "core5_dra_containment_v2": CORE5_DRA_CONTAINMENT_V2_FEATURE_COLUMNS,
     "adx_parts": ADX_PARTS_FEATURE_COLUMNS,
+    "adx_parts_containment_v2": ADX_PARTS_CONTAINMENT_V2_FEATURE_COLUMNS,
     "adx_parts_minus_persistence": ADX_PARTS_MINUS_PERSISTENCE_FEATURE_COLUMNS,
     "adx_parts_minus_crossover": ADX_PARTS_MINUS_CROSSOVER_FEATURE_COLUMNS,
     "adx_parts_minus_log_vr": ADX_PARTS_MINUS_LOG_VR_FEATURE_COLUMNS,
@@ -242,6 +252,31 @@ def build_post_adx_persistence_rewrite_registry(session_name: str, ridge_alpha: 
             "post_covid",
             "adx_parts_persistence_recency",
             ADX_PARTS_PERSISTENCE_RECENCY_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+    ]
+
+
+def build_containment_v2_registry(session_name: str, ridge_alpha: float = 1.0) -> list[ExperimentSpec]:
+    return [
+        ExperimentSpec(
+            "EXP40_post_core5_dra_containment_v2",
+            "containment_v2",
+            session_name,
+            "post_covid",
+            "core5_dra_containment_v2",
+            CORE5_DRA_CONTAINMENT_V2_FEATURE_COLUMNS,
+            "ridge",
+            ridge_alpha,
+        ),
+        ExperimentSpec(
+            "EXP41_post_adx_parts_containment_v2",
+            "containment_v2",
+            session_name,
+            "post_covid",
+            "adx_parts_containment_v2",
+            ADX_PARTS_CONTAINMENT_V2_FEATURE_COLUMNS,
             "ridge",
             ridge_alpha,
         ),

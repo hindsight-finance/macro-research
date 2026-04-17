@@ -71,13 +71,62 @@ def test_build_modeling_table_emits_one_row_per_date_and_session(tmp_path: Path)
         "irr",
         "er",
         "log_vr",
+        "containment_displacement",
+        "containment_edge_balance",
+        "containment_inside_share",
+        "containment_path_efficiency",
+        "containment_overshoot_ratio",
+        "containment_range_stability",
+        "containment_mid_cross_count",
+        "containment_swing_symmetry",
+        "containment_ib_extension_ratio",
+        "containment_ib_asymmetry",
+        "containment_bandwidth_squeeze",
+        "containment_vwap_acceptance",
+        "containment_excess_rejection",
+        "containment_target",
+        "containment_status",
         "descriptive_target",
+        "trend_score",
+        "containment_score",
+        "chop_flip_rate",
+        "chop_path_waste",
+        "chop_outside_share",
+        "chop_instability",
+        "chop_score",
+        "chop_status",
         "feature_status",
         "target_status",
     } <= set(table.columns)
     assert len(table) == 2
     assert table.groupby(["trade_date", "session_name"]).size().eq(1).all()
     assert set(table["feature_status"]) == {"ok"}
+    assert set(table["containment_status"]) == {"ok"}
+    assert table[
+        [
+            "containment_overshoot_ratio",
+            "containment_range_stability",
+            "containment_mid_cross_count",
+            "containment_swing_symmetry",
+            "containment_ib_extension_ratio",
+            "containment_ib_asymmetry",
+            "containment_bandwidth_squeeze",
+            "containment_vwap_acceptance",
+            "containment_excess_rejection",
+        ]
+    ].notna().all().all()
+    assert table["trend_score"].equals(table["descriptive_target"])
+    assert table["containment_score"].equals(table["containment_target"])
+    assert table[
+        [
+            "chop_flip_rate",
+            "chop_path_waste",
+            "chop_outside_share",
+            "chop_instability",
+            "chop_score",
+        ]
+    ].notna().all().all()
+    assert set(table["chop_status"]) == {"ok"}
     assert set(table["session_name"]) == {"1pm-3pm"}
 
 

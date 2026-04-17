@@ -6,7 +6,9 @@ from typing import Sequence
 
 import pandas as pd
 
+from features.trend.modeling.containment_research import load_post_covid_table, run_default_containment_research
 from features.trend.modeling.registry import (
+    build_containment_v2_registry,
     build_experiment_registry,
     build_post_adx_ablation_registry,
     build_post_adx_persistence_rewrite_registry,
@@ -40,7 +42,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--experiment-group",
         default="representation_sweep",
-        choices=("representation_sweep", "ridge_alpha_sweep", "post_adx_ablation", "post_adx_persistence_rewrites"),
+        choices=(
+            "representation_sweep",
+            "ridge_alpha_sweep",
+            "post_adx_ablation",
+            "post_adx_persistence_rewrites",
+            "containment_v2",
+        ),
     )
     run_parser.add_argument("--ridge-alpha", type=float, default=1.0)
     run_parser.add_argument("--target-column", default="descriptive_target")
@@ -52,6 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
     summarize_parser = subparsers.add_parser("summarize", help="Summarize saved experiment outputs")
     summarize_parser.add_argument("--experiments-dir", required=True)
     summarize_parser.add_argument("--output-path")
+
+    containment_research_parser = subparsers.add_parser(
+        "containment-research",
+        help="Run containment regression/classification bakeoffs",
+    )
+    containment_research_parser.add_argument("--table-path", required=True)
+    containment_research_parser.add_argument("--output-dir", required=True)
 
     return parser
 
@@ -74,6 +89,8 @@ def _select_experiment_specs(args: argparse.Namespace):
         return build_post_adx_ablation_registry(session_name=args.session_name, ridge_alpha=args.ridge_alpha)
     if args.experiment_group == "post_adx_persistence_rewrites":
         return build_post_adx_persistence_rewrite_registry(session_name=args.session_name, ridge_alpha=args.ridge_alpha)
+    if args.experiment_group == "containment_v2":
+        return build_containment_v2_registry(session_name=args.session_name, ridge_alpha=args.ridge_alpha)
     return build_experiment_registry(session_name=args.session_name, ridge_alpha=args.ridge_alpha)
 
 
@@ -120,6 +137,19 @@ def _summarize_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _containment_research_command(args: argparse.Namespace) -> int:
+    table = load_post_covid_table(args.table_path)
+    regression_summary, classification_summary = run_default_containment_research(
+        table=table,
+        output_dir=args.output_dir,
+        table_label=Path(args.table_path).name,
+    )
+    print(regression_summary.to_string(index=False))
+    print()
+    print(classification_summary.to_string(index=False))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -130,6 +160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_experiments_command(args)
     if args.command == "summarize":
         return _summarize_command(args)
+    if args.command == "containment-research":
+        return _containment_research_command(args)
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

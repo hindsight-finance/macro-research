@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 
 from features.trend.modeling.registry import (
+    build_containment_v2_registry,
     build_experiment_registry,
     build_post_adx_ablation_registry,
     build_post_adx_persistence_rewrite_registry,
@@ -43,6 +44,14 @@ def test_build_post_adx_persistence_rewrite_registry_contains_variants():
     assert "EXP31_post_adx_persistence_margin" in ids
     assert "EXP32_post_adx_persistence_control" in ids
     assert "EXP33_post_adx_persistence_recency" in ids
+
+
+def test_build_containment_v2_registry_contains_post_winner_variants():
+    registry = build_containment_v2_registry(session_name="1pm-3pm")
+    ids = {experiment.experiment_id for experiment in registry}
+
+    assert "EXP40_post_core5_dra_containment_v2" in ids
+    assert "EXP41_post_adx_parts_containment_v2" in ids
 
 
 def test_filter_table_for_era_excludes_covid_transition_dates():

@@ -77,3 +77,37 @@ def test_build_parser_accepts_post_adx_persistence_rewrite_group():
     )
 
     assert args.experiment_group == "post_adx_persistence_rewrites"
+
+
+def test_build_parser_accepts_containment_v2_group():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-experiments",
+            "--table-path",
+            "table.parquet",
+            "--session-name",
+            "1pm-3pm",
+            "--output-dir",
+            "outputs/trend_modeling/experiments",
+            "--experiment-group",
+            "containment_v2",
+        ]
+    )
+
+    assert args.experiment_group == "containment_v2"
+
+
+def test_build_parser_accepts_containment_research_command():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "containment-research",
+            "--table-path",
+            "table.parquet",
+            "--output-dir",
+            "outputs/trend_modeling/research",
+        ]
+    )
+
+    assert args.command == "containment-research"
