@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 # =============================
 # HARD-CODED PATHS (edit these)
 # =============================
-INPUT_BARS = "../outputs/nq_1m.parquet"   # <-- set to your bars file (.csv or .parquet)
-OUT_DIR    = "../outputs/figs/ma"                  # <-- set to your desired output folder
+INPUT_BARS = "outputs/nq_minute_base.parquet"   # <-- set to your bars file (.csv or .parquet)
+OUT_DIR    = "outputs/figs/ma"                  # <-- set to your desired output folder
 
 # ---------- Helpers ----------
 
@@ -39,28 +39,31 @@ def read_bars(path: str) -> pd.DataFrame:
 
     ci = {c.lower(): c for c in df.columns}
 
-    dt_col = _find_col(ci, "datetime_et", "date_time_et", "datetime", "timestamp", "time_et", "dt_et", "dt", "time", "date_time")
-    if dt_col is None:
-        date_col = _find_col(ci, "date", "trade_date", "session_date")
-        time_col = _find_col(ci, "time", "time_et", "bar_time")
-        if date_col and time_col:
-            dt = pd.to_datetime(df[date_col].astype(str) + " " + df[time_col].astype(str), errors="coerce")
-        else:
-            dt = None
-            for col in df.columns:
-                cand = _coerce_datetime(df[col])
-                if cand is not None and cand.notna().mean() > 0.95:
-                    dt = cand
-                    break
-            if dt is None:
-                raise ValueError("Could not find a datetime column.")
+    dt_col = _find_col(ci, "datetime_utc", "datetime_et", "date_time_et", "datetime", "timestamp", "time_et", "dt_et", "dt", "time", "date_time")
+    if dt_col == ci.get("datetime_utc"):
+        dt = pd.to_datetime(df[dt_col], utc=True, errors="coerce").dt.tz_convert("America/New_York").dt.tz_localize(None)
     else:
-        dt = pd.to_datetime(df[dt_col], errors="coerce")
+        if dt_col is None:
+            date_col = _find_col(ci, "date", "trade_date", "session_date")
+            time_col = _find_col(ci, "time", "time_et", "bar_time")
+            if date_col and time_col:
+                dt = pd.to_datetime(df[date_col].astype(str) + " " + df[time_col].astype(str), errors="coerce")
+            else:
+                dt = None
+                for col in df.columns:
+                    cand = _coerce_datetime(df[col])
+                    if cand is not None and cand.notna().mean() > 0.95:
+                        dt = cand
+                        break
+                if dt is None:
+                    raise ValueError("Could not find a datetime column.")
+        else:
+            dt = pd.to_datetime(df[dt_col], errors="coerce")
 
     if dt.isna().all():
         raise ValueError(f"Datetime column '{dt_col}' could not be parsed.")
 
-    if pd.api.types.is_datetime64tz_dtype(dt):
+    if isinstance(dt.dtype, pd.DatetimeTZDtype):
         dt = dt.dt.tz_convert("America/New_York").dt.tz_localize(None)
 
     O_col = _find_col(ci, "open", "o")

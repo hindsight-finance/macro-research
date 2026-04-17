@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -6,8 +7,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+try:
+    from utils.minute_bars import (
+        build_market_time_columns,
+        derive_session_window,
+        load_minute_bars,
+        normalize_minute_bars,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from utils.minute_bars import (
+        build_market_time_columns,
+        derive_session_window,
+        load_minute_bars,
+        normalize_minute_bars,
+    )
 
-INPUT_PATH = Path("outputs/nq_1m.parquet")
+INPUT_PATH = Path("outputs/nq_minute_base.parquet")
 EVENTS_OUTPUT_PATH = Path("outputs/nq_macro_fvg_events.parquet")
 SUMMARY_OUTPUT_PATH = Path("outputs/nq_macro_fvg_summary.parquet")
 FIGURES_DIR = Path("outputs/figs/fvg")
@@ -56,6 +72,12 @@ SUMMARY_COLUMNS = [
     "assigned_minute_index",
     "bar2_volume_bucket",
 ]
+
+
+def _prepare_macro_bars(df: pd.DataFrame) -> pd.DataFrame:
+    work = derive_session_window(build_market_time_columns(normalize_minute_bars(df)))
+    work["DateTime_ET"] = work["datetime_et"]
+    return work.sort_values("DateTime_ET").reset_index(drop=True)
 
 
 def assign_stage(ts: pd.Timestamp) -> str:
@@ -151,14 +173,12 @@ def mark_stacked_continuation_fvgs(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
-    required = {"DateTime_ET", "Open", "High", "Low", "Close", "Volume", "window"}
+    required = {"Open", "High", "Low", "Close", "Volume"}
     missing = required.difference(df.columns)
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    work = df.copy()
-    work["DateTime_ET"] = pd.to_datetime(work["DateTime_ET"])
-    work = work.sort_values("DateTime_ET").reset_index(drop=True)
+    work = _prepare_macro_bars(df)
     work["bar1_date"] = work["DateTime_ET"].shift(1).dt.normalize()
     work["bar3_date"] = work["DateTime_ET"].shift(-1).dt.normalize()
     work["bar1_open"] = work["Open"].shift(1)
@@ -344,11 +364,8 @@ def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame)
     if events.empty:
         return events.copy()
 
-    work_bars = bars.copy()
-    work_bars["DateTime_ET"] = pd.to_datetime(work_bars["DateTime_ET"])
-    work_bars = work_bars.sort_values("DateTime_ET").reset_index(drop=True)
-    if "window" in work_bars.columns:
-        work_bars = work_bars[work_bars["window"] == MACRO_WINDOW].copy()
+    work_bars = _prepare_macro_bars(bars)
+    work_bars = work_bars[work_bars["window"] == MACRO_WINDOW].copy()
     work_bars["date"] = work_bars["DateTime_ET"].dt.normalize()
     bars_by_date = {
         date: group.reset_index(drop=True)
@@ -1725,7 +1742,7 @@ def run_macro_fvg_study(
     summary_output_path: Path = SUMMARY_OUTPUT_PATH,
     figures_dir: Path = FIGURES_DIR,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    bars = pd.read_parquet(input_path)
+    bars = load_minute_bars(input_path)
     events = detect_macro_fvgs(bars)
     events = scan_fvg_outcomes_until_1559_close(events, bars)
     summary = build_summary_tables(events)
