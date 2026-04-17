@@ -2,11 +2,19 @@
 import argparse
 import os
 import glob
+import sys
 import warnings
+from pathlib import Path
 from typing import List
 
 import numpy as np
 import pandas as pd
+
+try:
+    from utils.minute_bars import build_market_time_columns, load_minute_bars
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from utils.minute_bars import build_market_time_columns, load_minute_bars
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -14,11 +22,6 @@ PM_START = pd.Timestamp("13:00:00").time()   # 13:00 inclusive
 PM_END   = pd.Timestamp("15:00:00").time()   # 15:00 exclusive
 HR3_START = pd.Timestamp("15:00:00").time()  # 15:00 inclusive
 HR3_END   = pd.Timestamp("15:50:00").time()  # 15:50 exclusive
-
-def _read_any(path: str) -> pd.DataFrame:
-    if path.lower().endswith(".parquet"):
-        return pd.read_parquet(path)
-    return pd.read_csv(path)
 
 def _load_minutes(paths: List[str]) -> pd.DataFrame:
     files = []
@@ -28,27 +31,15 @@ def _load_minutes(paths: List[str]) -> pd.DataFrame:
         raise FileNotFoundError(f"No input files matched: {paths}")
     dfs = []
     for f in sorted(files):
-        df = _read_any(f)
+        df = build_market_time_columns(load_minute_bars(f))
         df["__srcfile"] = os.path.basename(f)
+        df["timestamp"] = df["datetime_et"]
+        df["date"] = df["datetime_et"].dt.date
+        df["time"] = df["datetime_et"].dt.time
         dfs.append(df)
     out = pd.concat(dfs, ignore_index=True)
-
-    # timestamp column (ET-naive)
-    ts_col = None
-    for c in ["timestamp", "datetime", "DateTime_ET", "time", "dt"]:
-        if c in out.columns:
-            ts_col = c
-            break
-    if ts_col is None:
-        raise ValueError("Could not find a timestamp column.")
-
-    out = out.rename(columns={ts_col: "timestamp"})
-    out["timestamp"] = pd.to_datetime(out["timestamp"])
     out = out.sort_values("timestamp").reset_index(drop=True)
-    out["date"] = out["timestamp"].dt.date
-    out["time"] = out["timestamp"].dt.time
 
-    # normalize OHLCV col names
     colmap = {
         "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume",
         "OPEN": "open", "HIGH": "high", "LOW": "low", "CLOSE": "close", "VOLUME": "volume"

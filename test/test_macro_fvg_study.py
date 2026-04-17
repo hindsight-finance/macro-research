@@ -22,6 +22,52 @@ def make_bars(rows):
     return df
 
 
+def make_utc_bars(rows):
+    df = pd.DataFrame(rows)
+    if "Volume" not in df.columns:
+        df["Volume"] = 0
+    else:
+        df["Volume"] = df["Volume"].fillna(0)
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+    return df
+
+
+def test_detect_macro_fvg_derives_macro_window_from_datetime_utc():
+    bars = make_utc_bars(
+        [
+            {
+                "datetime_utc": "2025-01-02 20:49:00+00:00",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "Volume": 1,
+            },
+            {
+                "datetime_utc": "2025-01-02 20:50:00+00:00",
+                "Open": 99.0,
+                "High": 100.0,
+                "Low": 97.0,
+                "Close": 98.0,
+                "Volume": 2,
+            },
+            {
+                "datetime_utc": "2025-01-02 20:51:00+00:00",
+                "Open": 96.0,
+                "High": 97.0,
+                "Low": 94.0,
+                "Close": 95.0,
+                "Volume": 3,
+            },
+        ]
+    )
+
+    events = detect_macro_fvgs(bars)
+
+    assert len(events) == 1
+    assert events.iloc[0]["assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")
+
+
 def test_detects_bearish_macro_fvg_and_stores_assigned_and_confirmed_times():
     bars = make_bars(
         [
