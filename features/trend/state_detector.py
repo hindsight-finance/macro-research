@@ -1,15 +1,10 @@
 """
-Market State Detector
+Legacy ensemble-based market state detector.
 
-Unified system for detecting market regime (trending, consolidating, choppy) by
-combining signals from 7 complementary trend identification modules.
-
-Architecture:
-- Base classes for indicator interface
-- Individual indicator wrappers
-- StateDetector main class with weighted signal combination
-- Dynamic Hurst-based weight adjustment
-- Session-aware configuration
+Historical regime classification now lives under `features.trend.modeling`
+via `build_modeling_table(...)` plus `assign_three_scalar_labels(...)`.
+This module remains because indicator wrappers are still imported by
+`features.trend.modeling.table`.
 """
 
 from __future__ import annotations
@@ -744,11 +739,10 @@ def determine_direction(df: pd.DataFrame) -> TrendDirection:
 
 class StateDetector:
     """
-    Unified market state detection using weighted indicator ensemble.
+    Legacy weighted indicator ensemble for research only.
 
-    Combines signals from 7 trend identification modules to classify market regime.
-    Optionally uses the Hurst exponent as a meta-signal to dynamically adjust
-    indicator weights toward the detected regime.
+    Use `features.trend.modeling.table.build_modeling_table(...)` and the
+    historical regime labeling helpers for the canonical historical path.
     """
 
     # Default weights (sum to 1.0)

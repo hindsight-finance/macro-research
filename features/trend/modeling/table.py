@@ -295,6 +295,7 @@ def build_modeling_table(
     instrument: str,
     session_names: Iterable[str] = DEFAULT_SESSION_NAMES,
 ) -> pd.DataFrame:
+    """Canonical historical regime feature/score builder."""
     bars = pd.read_parquet(input_path)
     normalized = _normalize_input_bars(bars)
     normalized["trade_date"] = normalized["timestamp"].dt.date

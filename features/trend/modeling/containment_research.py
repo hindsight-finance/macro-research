@@ -30,6 +30,7 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from features.trend.modeling.labels import THREE_SCALAR_LABELS, assign_three_scalar_labels
 from features.trend.modeling.registry import filter_table_for_era
 from features.trend.modeling.walkforward import generate_walkforward_folds, reserve_final_holdout
 
@@ -71,9 +72,6 @@ DEFAULT_CONTAINMENT_FEATURE_SETS = {
         "containment_excess_rejection",
     ),
 }
-
-THREE_WAY_LABELS = ["trend", "containment", "chop"]
-
 
 def _corr(a: np.ndarray, b: np.ndarray, method: str) -> float:
     left = pd.Series(a)
@@ -334,38 +332,6 @@ def run_default_containment_research(
 
     return regression_summary, classification_summary
 
-
-def assign_three_scalar_labels(
-    frame: pd.DataFrame,
-    trend_high: float,
-    containment_high: float,
-    chop_high: float,
-    low_cutoff: float,
-    containment_chop_max: float | None = None,
-) -> pd.DataFrame:
-    chop_cap = containment_chop_max if containment_chop_max is not None else 0.55
-    labels = pd.Series(index=frame.index, dtype="object")
-    labels.loc[
-        (frame["trend_score"] >= trend_high)
-        & (frame["containment_score"] <= low_cutoff)
-        & (frame["chop_score"] <= low_cutoff)
-    ] = "trend"
-    labels.loc[
-        (frame["containment_score"] >= containment_high)
-        & (frame["trend_score"] <= low_cutoff)
-        & (frame["chop_score"] <= chop_cap)
-    ] = "containment"
-    labels.loc[
-        (frame["chop_score"] >= chop_high)
-        & (frame["trend_score"] <= low_cutoff)
-        & (frame["containment_score"] <= low_cutoff)
-    ] = "chop"
-
-    labeled = frame.loc[labels.notna()].copy()
-    labeled["label"] = labels.loc[labels.notna()].to_numpy()
-    return labeled
-
-
 def run_three_way_probe(
     table: pd.DataFrame,
     session_feature_sets: dict[str, tuple[str, ...]] | None = None,
@@ -419,14 +385,14 @@ def run_three_way_probe(
         )
         development = frame.loc[frame["trade_date"].isin(development_dates)].copy()
         holdout = frame.loc[frame["trade_date"].isin(holdout_dates)].copy()
-        dev_labeled = assign_three_scalar_labels(frame=development, **thresholds)
-        hold_labeled = assign_three_scalar_labels(frame=holdout, **thresholds)
+        dev_labeled = assign_three_scalar_labels(frame=development, **thresholds, drop_uncertain=True)
+        hold_labeled = assign_three_scalar_labels(frame=holdout, **thresholds, drop_uncertain=True)
 
         if (
             dev_labeled.empty
             or hold_labeled.empty
-            or dev_labeled["label"].nunique() < len(THREE_WAY_LABELS)
-            or hold_labeled["label"].nunique() < len(THREE_WAY_LABELS)
+            or set(dev_labeled["label"].unique()) != set(THREE_SCALAR_LABELS)
+            or set(hold_labeled["label"].unique()) != set(THREE_SCALAR_LABELS)
         ):
             continue
 
@@ -448,7 +414,7 @@ def run_three_way_probe(
                         f1_score(
                             hold_labeled["label"],
                             prediction,
-                            labels=THREE_WAY_LABELS,
+                            labels=THREE_SCALAR_LABELS,
                             average="macro",
                             zero_division=0,
                         )
@@ -457,7 +423,7 @@ def run_three_way_probe(
                         f1_score(
                             hold_labeled["label"],
                             prediction,
-                            labels=THREE_WAY_LABELS,
+                            labels=THREE_SCALAR_LABELS,
                             average="weighted",
                             zero_division=0,
                         )
@@ -468,12 +434,12 @@ def run_three_way_probe(
                     "confusion_matrix": confusion_matrix(
                         hold_labeled["label"],
                         prediction,
-                        labels=THREE_WAY_LABELS,
+                        labels=THREE_SCALAR_LABELS,
                     ).tolist(),
                     "report": classification_report(
                         hold_labeled["label"],
                         prediction,
-                        labels=THREE_WAY_LABELS,
+                        labels=THREE_SCALAR_LABELS,
                         output_dict=True,
                         zero_division=0,
                     ),

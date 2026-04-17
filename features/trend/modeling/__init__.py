@@ -1,3 +1,4 @@
+from .labels import DEFAULT_LABEL_THRESHOLDS, THREE_SCALAR_LABELS, assign_three_scalar_labels
 from .registry import build_experiment_registry, build_ridge_alpha_sweep, filter_table_for_era
 from .table import build_modeling_table, write_modeling_table_cache
 from .target import build_chop_target, build_descriptive_target
@@ -10,6 +11,9 @@ from .walkforward import (
 )
 
 __all__ = [
+    "DEFAULT_LABEL_THRESHOLDS",
+    "THREE_SCALAR_LABELS",
+    "assign_three_scalar_labels",
     "build_chop_target",
     "build_descriptive_target",
     "build_experiment_registry",
