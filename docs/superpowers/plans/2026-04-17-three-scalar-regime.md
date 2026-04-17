@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a realized `chop_score`, expose explicit scalar aliases (`trend_score`, `containment_score`), and wire the new chop diagnostics into the trend modeling table without changing the existing frozen trend or containment targets.
+**Goal:** Add explicit `trend_score`, `containment_score`, and new `chop_score` outputs to the modeling table and enable three-scalar regime research without redesigning the frozen trend target or current containment target.
 
-**Architecture:** Keep the current target builders intact, add a new `build_chop_target(...)` helper in `features/trend/modeling/target.py`, and alias the existing target columns inside `features/trend/modeling/table.py`. The walk-forward harness already accepts arbitrary `target_column` values, so this round only needs target/table/test wiring plus a small package-export update. Use TDD: failing target tests first, then implementation, then failing table/export tests, then integration and verification.
+**Architecture:** Preserve existing scalar logic by aliasing `descriptive_target` to `trend_score` and `containment_target` to `containment_score`, then add a new `build_chop_target(...)` realized-window target in `target.py`. Wire the new scalar aliases and chop components into `table.py`, then extend the research runner so three-way labels can be derived from the three independent scalars for multiclass experiments.
 
-**Tech Stack:** Python, NumPy, Pandas, pytest, existing trend modeling target/table/walkforward helpers
+**Tech Stack:** Python, NumPy, Pandas, pytest, existing trend modeling table and research runner
 
 ---
 
-### Task 1: Add failing chop-target tests
+### Task 1: Add failing chop-target unit tests
 
 **Files:**
 - Modify: `features/trend/modeling/test/test_target.py`
@@ -20,10 +20,7 @@
 
 ```python
 def test_build_chop_target_returns_bounded_components():
-    open_, high, low, close = _make_ohlc([100.0, 101.7, 99.0, 101.5, 98.8, 101.4, 99.9])
-
-    result = build_chop_target(open_=open_, high=high, low=low, close=close)
-
+    result = build_chop_target(...)
     assert {
         "chop_flip_rate",
         "chop_path_waste",
@@ -32,32 +29,12 @@ def test_build_chop_target_returns_bounded_components():
         "chop_score",
         "chop_status",
     } <= set(result)
-    assert 0.0 <= result["chop_score"] <= 1.0
 
 
-def test_chop_target_scores_ugly_chop_above_rotation_and_trend():
-    trend_open, trend_high, trend_low, trend_close = _make_ohlc([100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0])
-    rotating_open, rotating_high, rotating_low, rotating_close = _make_ohlc([100.0, 101.6, 100.9, 99.3, 100.0, 101.1, 100.2])
-    chop_open, chop_high, chop_low, chop_close = _make_ohlc([100.0, 101.7, 99.0, 101.5, 98.8, 101.4, 99.9])
-
-    trend = build_chop_target(
-        open_=trend_open,
-        high=trend_high,
-        low=trend_low,
-        close=trend_close,
-    )
-    rotating = build_chop_target(
-        open_=rotating_open,
-        high=rotating_high,
-        low=rotating_low,
-        close=rotating_close,
-    )
-    chop = build_chop_target(
-        open_=chop_open,
-        high=chop_high,
-        low=chop_low,
-        close=chop_close,
-    )
+def test_chop_target_scores_ugly_chop_above_clean_rotation_and_trend():
+    trend = build_chop_target(...)
+    rotating = build_chop_target(...)
+    chop = build_chop_target(...)
 
     assert chop["chop_score"] > rotating["chop_score"]
     assert chop["chop_score"] > trend["chop_score"]
@@ -66,67 +43,13 @@ def test_chop_target_scores_ugly_chop_above_rotation_and_trend():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python3 -m pytest features/trend/modeling/test/test_target.py -q`
-Expected: FAIL because `build_chop_target` does not exist yet.
+Expected: FAIL because `build_chop_target` does not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-def build_chop_target(
-    open_: np.ndarray,
-    high: np.ndarray,
-    low: np.ndarray,
-    close: np.ndarray,
-) -> dict:
-    _, high_arr, low_arr, close_arr = _coerce_ohlc_arrays(
-        open_=open_,
-        high=high,
-        low=low,
-        close=close,
-    )
-    realized_range, close_pos = _compute_realized_range_and_close_pos(
-        high_arr=high_arr,
-        low_arr=low_arr,
-        close_arr=close_arr,
-    )
-    returns = np.diff(np.log(close_arr))
-    nonzero_returns = returns[returns != 0]
-    sign_changes = (
-        np.count_nonzero(np.sign(nonzero_returns[1:]) != np.sign(nonzero_returns[:-1]))
-        if nonzero_returns.size > 1
-        else 0
-    )
-    flip_rate = float(sign_changes / max(nonzero_returns.size - 1, 1))
-    path_length = float(np.sum(np.abs(np.diff(close_arr))))
-    path_waste = float(np.clip(path_length / (realized_range + 1e-12), 0.0, 4.0) / 4.0)
-    outside_share = float(np.mean((close_pos < 0.05) | (close_pos > 0.95)))
-    block_indexes = [
-        block
-        for block in np.array_split(np.arange(close_arr.size), min(4, close_arr.size))
-        if block.size
-    ]
-    block_ranges = [
-        float(high_arr[idx].max() - low_arr[idx].min()) / (realized_range + 1e-12)
-        for idx in block_indexes
-    ]
-    instability = float(np.clip(np.std(block_ranges, ddof=0), 0.0, 1.0))
-    chop_score = float(
-        np.clip(
-            0.35 * path_waste
-            + 0.30 * flip_rate
-            + 0.20 * outside_share
-            + 0.15 * instability,
-            0.0,
-            1.0,
-        )
-    )
-    return {
-        "chop_flip_rate": flip_rate,
-        "chop_path_waste": path_waste,
-        "chop_outside_share": outside_share,
-        "chop_instability": instability,
-        "chop_score": chop_score,
-        "chop_status": "ok",
-    }
+def build_chop_target(open_, high, low, close) -> dict:
+    ...
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -138,16 +61,14 @@ Expected: PASS
 
 ```bash
 git add features/trend/modeling/test/test_target.py features/trend/modeling/target.py
-git commit -m "feat: add realized chop target"
+git commit -m "feat: add chop scalar target"
 ```
 
-### Task 2: Add failing scalar-alias and chop-column table tests
+### Task 2: Add failing table tests for scalar aliases and chop columns
 
 **Files:**
 - Modify: `features/trend/modeling/test/test_table.py`
-- Modify: `features/trend/modeling/test/test_init.py`
 - Test: `features/trend/modeling/test/test_table.py`
-- Test: `features/trend/modeling/test/test_init.py`
 
 - [ ] **Step 1: Write the failing assertions**
 
@@ -162,84 +83,164 @@ assert {
     "chop_score",
     "chop_status",
 } <= set(table.columns)
-
-assert table["trend_score"].equals(table["descriptive_target"])
-assert table["containment_score"].equals(table["containment_target"])
-assert table[
-    ["chop_flip_rate", "chop_path_waste", "chop_outside_share", "chop_instability", "chop_score"]
-].notna().all().all()
-assert set(table["chop_status"]) == {"ok"}
 ```
 
 ```python
-assert callable(modeling.build_chop_target)
+assert set(table["chop_status"]) == {"ok"}
+assert table[["trend_score", "containment_score", "chop_score"]].notna().all().all()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest features/trend/modeling/test/test_table.py features/trend/modeling/test/test_init.py -q`
-Expected: FAIL because the alias columns, chop columns, or export are missing.
+Run: `python3 -m pytest features/trend/modeling/test/test_table.py -q`
+Expected: FAIL because scalar aliases and chop columns are missing.
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
 row["trend_score"] = row["descriptive_target"]
 row["containment_score"] = row["containment_target"]
-row.update(
-    build_chop_target(
-        open_=window_bars["open"].to_numpy(),
-        high=window_bars["high"].to_numpy(),
-        low=window_bars["low"].to_numpy(),
-        close=window_bars["close"].to_numpy(),
-    )
-)
-```
-
-```python
-from .target import build_chop_target, build_descriptive_target
+row.update(build_chop_target(...))
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python3 -m pytest features/trend/modeling/test/test_table.py features/trend/modeling/test/test_init.py -q`
+Run: `python3 -m pytest features/trend/modeling/test/test_table.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add features/trend/modeling/test/test_table.py features/trend/modeling/test/test_init.py features/trend/modeling/table.py features/trend/modeling/__init__.py
-git commit -m "feat: add three-scalar regime columns to modeling table"
+git add features/trend/modeling/test/test_table.py features/trend/modeling/table.py
+git commit -m "feat: add three-scalar regime outputs"
 ```
 
-### Task 3: Run focused verification for trend modeling
+### Task 3: Add failing research-runner tests for three-scalar label derivation
 
 **Files:**
-- Modify: `features/trend/modeling/target.py`
-- Modify: `features/trend/modeling/table.py`
-- Modify: `features/trend/modeling/__init__.py`
-- Test: `features/trend/modeling/test/test_target.py`
-- Test: `features/trend/modeling/test/test_table.py`
-- Test: `features/trend/modeling/test/test_init.py`
-- Test: `features/trend/modeling/test/test_walkforward.py`
+- Modify: `features/trend/modeling/test/test_containment_research.py`
+- Modify: `features/trend/modeling/containment_research.py`
+- Test: `features/trend/modeling/test/test_containment_research.py`
 
-- [ ] **Step 1: Run focused modeling verification**
+- [ ] **Step 1: Write the failing tests**
 
-Run: `python3 -m pytest features/trend/modeling/test/test_target.py features/trend/modeling/test/test_table.py features/trend/modeling/test/test_init.py features/trend/modeling/test/test_walkforward.py -q`
-Expected: PASS with the new chop target, aliases, and existing generic walk-forward path still green.
+```python
+def test_assign_three_scalar_labels_returns_three_classes():
+    labeled = assign_three_scalar_labels(...)
+    assert {"trend", "containment", "chop"} <= set(labeled["label"])
+```
 
-- [ ] **Step 2: Run broader trend verification**
+```python
+def test_run_three_way_probe_returns_macro_metrics():
+    results = run_three_way_probe(...)
+    assert {"model", "macro_f1", "balanced_accuracy", "confusion_matrix"} <= set(results.columns)
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `python3 -m pytest features/trend/modeling/test/test_containment_research.py -q`
+Expected: FAIL because the three-scalar helpers do not exist.
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+def assign_three_scalar_labels(...):
+    ...
+
+
+def run_three_way_probe(...):
+    ...
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `python3 -m pytest features/trend/modeling/test/test_containment_research.py -q`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add features/trend/modeling/test/test_containment_research.py features/trend/modeling/containment_research.py
+git commit -m "feat: add three-scalar regime research helpers"
+```
+
+### Task 4: Run full verification
+
+**Files:**
+- Modify: none
+
+- [ ] **Step 1: Run modeling tests**
+
+Run: `python3 -m pytest features/trend/modeling/test -q`
+Expected: PASS
+
+- [ ] **Step 2: Run broader trend suite**
 
 Run: `python3 -m pytest features/trend -q`
-Expected: PASS, proving the new target/table wiring does not regress the wider trend package.
+Expected: PASS
 
-- [ ] **Step 3: Inspect diff**
+- [ ] **Step 3: Commit**
 
-Run: `git status --short && git diff -- features/trend/modeling/target.py features/trend/modeling/table.py features/trend/modeling/__init__.py features/trend/modeling/test/test_target.py features/trend/modeling/test/test_table.py features/trend/modeling/test/test_init.py`
-Expected: Only the planned three-scalar regime changes appear.
+```bash
+git add features/trend/modeling docs/superpowers/specs/2026-04-17-three-scalar-regime-design.md docs/superpowers/plans/2026-04-17-three-scalar-regime.md
+git commit -m "feat: add three-scalar regime research support"
+```
+
+### Task 5: Rebuild table and run three-scalar research outputs
+
+**Files:**
+- Modify: `outputs/trend_modeling/cache/nq_trend_modeling_table_regime_3scalar.parquet`
+- Modify: `outputs/trend_modeling/regime_3scalar/...`
+
+- [ ] **Step 1: Rebuild table**
+
+Run:
+
+```bash
+python3 -m features.trend.modeling.cli build-table \
+  --input-path /mnt/e/backup/code/finance/research/macro/outputs/nq_1m.parquet \
+  --instrument NQ \
+  --output-path /mnt/e/backup/code/finance/research/macro/outputs/trend_modeling/cache/nq_trend_modeling_table_regime_3scalar.parquet
+```
+
+Expected: `Wrote ... rows to .../nq_trend_modeling_table_regime_3scalar.parquet`
+
+- [ ] **Step 2: Run existing containment research runner against rebuilt table**
+
+Run:
+
+```bash
+python3 -m features.trend.modeling.cli containment-research \
+  --table-path /mnt/e/backup/code/finance/research/macro/outputs/trend_modeling/cache/nq_trend_modeling_table_regime_3scalar.parquet \
+  --output-dir /mnt/e/backup/code/finance/research/macro/outputs/trend_modeling/regime_3scalar
+```
+
+Expected: updated scalar research summaries written under `regime_3scalar/`
+
+- [ ] **Step 3: Run direct three-way probe**
+
+Run:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import pandas as pd
+from features.trend.modeling.containment_research import load_post_covid_table, run_three_way_probe
+
+table = load_post_covid_table('/mnt/e/backup/code/finance/research/macro/outputs/trend_modeling/cache/nq_trend_modeling_table_regime_3scalar.parquet')
+results = run_three_way_probe(table=table)
+out = Path('/mnt/e/backup/code/finance/research/macro/outputs/trend_modeling/regime_3scalar/three_way_probe.csv')
+out.parent.mkdir(parents=True, exist_ok=True)
+results.to_csv(out, index=False)
+print(results.to_string(index=False))
+PY
+```
+
+Expected: macro-F1 / balanced accuracy / confusion results for `trend`, `containment`, `chop`
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add features/trend/modeling/target.py features/trend/modeling/table.py features/trend/modeling/__init__.py features/trend/modeling/test/test_target.py features/trend/modeling/test/test_table.py features/trend/modeling/test/test_init.py
-git commit -m "feat: add three-scalar regime modeling targets"
+git add outputs/trend_modeling/cache/nq_trend_modeling_table_regime_3scalar.parquet outputs/trend_modeling/regime_3scalar
+git commit -m "feat: generate three-scalar regime research outputs"
 ```

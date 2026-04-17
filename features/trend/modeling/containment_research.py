@@ -17,6 +17,9 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     average_precision_score,
     balanced_accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
     matthews_corrcoef,
     mean_absolute_error,
     precision_score,
@@ -68,6 +71,8 @@ DEFAULT_CONTAINMENT_FEATURE_SETS = {
         "containment_excess_rejection",
     ),
 }
+
+THREE_WAY_LABELS = ["trend", "containment", "chop"]
 
 
 def _corr(a: np.ndarray, b: np.ndarray, method: str) -> float:
@@ -328,6 +333,154 @@ def run_default_containment_research(
     )
 
     return regression_summary, classification_summary
+
+
+def assign_three_scalar_labels(
+    frame: pd.DataFrame,
+    trend_high: float,
+    containment_high: float,
+    chop_high: float,
+    low_cutoff: float,
+    containment_chop_max: float | None = None,
+) -> pd.DataFrame:
+    chop_cap = containment_chop_max if containment_chop_max is not None else 0.55
+    labels = pd.Series(index=frame.index, dtype="object")
+    labels.loc[
+        (frame["trend_score"] >= trend_high)
+        & (frame["containment_score"] <= low_cutoff)
+        & (frame["chop_score"] <= low_cutoff)
+    ] = "trend"
+    labels.loc[
+        (frame["containment_score"] >= containment_high)
+        & (frame["trend_score"] <= low_cutoff)
+        & (frame["chop_score"] <= chop_cap)
+    ] = "containment"
+    labels.loc[
+        (frame["chop_score"] >= chop_high)
+        & (frame["trend_score"] <= low_cutoff)
+        & (frame["containment_score"] <= low_cutoff)
+    ] = "chop"
+
+    labeled = frame.loc[labels.notna()].copy()
+    labeled["label"] = labels.loc[labels.notna()].to_numpy()
+    return labeled
+
+
+def run_three_way_probe(
+    table: pd.DataFrame,
+    session_feature_sets: dict[str, tuple[str, ...]] | None = None,
+    holdout_fraction: float = 0.15,
+    label_thresholds: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    feature_sets = session_feature_sets or DEFAULT_CONTAINMENT_FEATURE_SETS
+    thresholds = label_thresholds or {
+        "trend_high": 0.70,
+        "containment_high": 0.70,
+        "chop_high": 0.70,
+        "low_cutoff": 0.40,
+        "containment_chop_max": 0.55,
+    }
+    model_map: dict[str, object] = {
+        "multinomial_logit": Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("model", LogisticRegression(max_iter=5000, class_weight="balanced")),
+            ]
+        ),
+        "hist_gbm": HistGradientBoostingClassifier(
+            max_depth=3,
+            learning_rate=0.05,
+            max_iter=250,
+            min_samples_leaf=20,
+            random_state=42,
+        ),
+        "random_forest": RandomForestClassifier(
+            n_estimators=500,
+            max_depth=6,
+            min_samples_leaf=5,
+            random_state=42,
+            n_jobs=-1,
+            class_weight="balanced_subsample",
+        ),
+    }
+
+    rows: list[dict] = []
+    for session_name, feature_columns in feature_sets.items():
+        frame = _prepare_session_frame(
+            table=table,
+            session_name=session_name,
+            feature_columns=feature_columns,
+            target_column="trend_score",
+        )
+        frame = frame.dropna(subset=["trend_score", "containment_score", "chop_score"]).copy()
+        development_dates, holdout_dates = reserve_final_holdout(
+            frame["trade_date"],
+            holdout_fraction=holdout_fraction,
+        )
+        development = frame.loc[frame["trade_date"].isin(development_dates)].copy()
+        holdout = frame.loc[frame["trade_date"].isin(holdout_dates)].copy()
+        dev_labeled = assign_three_scalar_labels(frame=development, **thresholds)
+        hold_labeled = assign_three_scalar_labels(frame=holdout, **thresholds)
+
+        if (
+            dev_labeled.empty
+            or hold_labeled.empty
+            or dev_labeled["label"].nunique() < len(THREE_WAY_LABELS)
+            or hold_labeled["label"].nunique() < len(THREE_WAY_LABELS)
+        ):
+            continue
+
+        for model_name, model in model_map.items():
+            fit_model = clone(model)
+            fit_model.fit(dev_labeled[list(feature_columns)], dev_labeled["label"])
+            prediction = fit_model.predict(hold_labeled[list(feature_columns)])
+
+            rows.append(
+                {
+                    "session": session_name,
+                    "model": model_name,
+                    "n_dev_labeled": int(len(dev_labeled)),
+                    "n_holdout_labeled": int(len(hold_labeled)),
+                    "dev_label_counts": dev_labeled["label"].value_counts().to_dict(),
+                    "holdout_label_counts": hold_labeled["label"].value_counts().to_dict(),
+                    "thresholds": thresholds,
+                    "macro_f1": float(
+                        f1_score(
+                            hold_labeled["label"],
+                            prediction,
+                            labels=THREE_WAY_LABELS,
+                            average="macro",
+                            zero_division=0,
+                        )
+                    ),
+                    "weighted_f1": float(
+                        f1_score(
+                            hold_labeled["label"],
+                            prediction,
+                            labels=THREE_WAY_LABELS,
+                            average="weighted",
+                            zero_division=0,
+                        )
+                    ),
+                    "balanced_accuracy": float(
+                        balanced_accuracy_score(hold_labeled["label"], prediction)
+                    ),
+                    "confusion_matrix": confusion_matrix(
+                        hold_labeled["label"],
+                        prediction,
+                        labels=THREE_WAY_LABELS,
+                    ).tolist(),
+                    "report": classification_report(
+                        hold_labeled["label"],
+                        prediction,
+                        labels=THREE_WAY_LABELS,
+                        output_dict=True,
+                        zero_division=0,
+                    ),
+                }
+            )
+
+    return pd.DataFrame(rows)
 
 
 def load_post_covid_table(table_path: str | Path) -> pd.DataFrame:
