@@ -1,6 +1,22 @@
+from datetime import datetime
+
 import features.macro_fvg_study as macro_fvg_study
-import pandas as pd
+import polars as pl
 import pytest
+
+
+
+def is_nullish(value):
+    return value is None or (isinstance(value, float) and value != value)
+
+
+def one_row(df: pl.DataFrame) -> dict:
+    assert df.height == 1
+    return df.row(0, named=True)
+
+
+def filter_one(df: pl.DataFrame, expr: pl.Expr) -> dict:
+    return one_row(df.filter(expr))
 
 from features.macro_fvg_study import (
     build_bar2_volume_summary,
@@ -13,22 +29,22 @@ from features.macro_fvg_study import (
 
 
 def make_bars(rows):
-    df = pd.DataFrame(rows)
+    df = pl.DataFrame(rows)
     if "Volume" not in df.columns:
-        df["Volume"] = 0
+        df = df.with_columns(pl.lit(0).alias("Volume"))
     else:
-        df["Volume"] = df["Volume"].fillna(0)
-    df["DateTime_ET"] = pd.to_datetime(df["DateTime_ET"])
+        df = df.with_columns(pl.col("Volume").fill_null(0))
+    df = df.with_columns(pl.col("DateTime_ET").cast(pl.String).str.to_datetime(strict=True))
     return df
 
 
 def make_utc_bars(rows):
-    df = pd.DataFrame(rows)
+    df = pl.DataFrame(rows)
     if "Volume" not in df.columns:
-        df["Volume"] = 0
+        df = df.with_columns(pl.lit(0).alias("Volume"))
     else:
-        df["Volume"] = df["Volume"].fillna(0)
-    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+        df = df.with_columns(pl.col("Volume").fill_null(0))
+    df = df.with_columns(pl.col("datetime_utc").cast(pl.String).str.to_datetime(time_zone="UTC", strict=True))
     return df
 
 
@@ -64,8 +80,8 @@ def test_detect_macro_fvg_derives_macro_window_from_datetime_utc():
 
     events = detect_macro_fvgs(bars)
 
-    assert len(events) == 1
-    assert events.iloc[0]["assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")
+    assert events.height == 1
+    assert events.row(0, named=True)["assigned_at"] == datetime(2025, 1, 2, 15, 50)
 
 
 def test_detects_bearish_macro_fvg_and_stores_assigned_and_confirmed_times():
@@ -100,11 +116,11 @@ def test_detects_bearish_macro_fvg_and_stores_assigned_and_confirmed_times():
 
     events = detect_macro_fvgs(bars)
 
-    assert len(events) == 1
-    event = events.iloc[0]
+    assert events.height == 1
+    event = events.row(0, named=True)
     assert event["fvg_side"] == "bearish"
-    assert event["assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")
-    assert event["confirmed_at"] == pd.Timestamp("2025-01-02 15:52:00")
+    assert event["assigned_at"] == datetime(2025, 1, 2, 15, 50)
+    assert event["confirmed_at"] == datetime(2025, 1, 2, 15, 52)
     assert event["assigned_stage"] == "stage_1"
 
 
@@ -143,7 +159,7 @@ def test_detect_macro_fvg_stores_assigned_minute_and_bar2_volume():
 
     events = detect_macro_fvgs(bars)
 
-    event = events.iloc[0]
+    event = events.row(0, named=True)
     assert event["assigned_minute_hhmm"] == "15:50"
     assert event["assigned_minute_index"] == 0
     assert event["bar2_volume"] == 25
@@ -184,7 +200,7 @@ def test_detect_macro_fvg_stores_later_assigned_minute_index():
 
     events = detect_macro_fvgs(bars)
 
-    event = events.iloc[0]
+    event = events.row(0, named=True)
     assert event["assigned_minute_hhmm"] == "15:57"
     assert event["assigned_minute_index"] == 7
     assert event["bar2_volume"] == 55
@@ -225,7 +241,7 @@ def test_detect_macro_fvg_stores_alignment_bucket_for_three_aligned():
 
     events = detect_macro_fvgs(bars)
 
-    event = events.iloc[0]
+    event = events.row(0, named=True)
     assert event["fvg_side"] == "bearish"
     assert event["bar1_direction"] == "bearish"
     assert event["bar2_direction"] == "bearish"
@@ -271,7 +287,7 @@ def test_detect_macro_fvg_stores_alignment_bucket_for_two_aligned_one_opposite()
 
     events = detect_macro_fvgs(bars)
 
-    event = events.iloc[0]
+    event = events.row(0, named=True)
     assert event["fvg_side"] == "bearish"
     assert event["bar1_direction"] == "bearish"
     assert event["bar2_direction"] == "bearish"
@@ -317,7 +333,7 @@ def test_detect_macro_fvg_stores_alignment_bucket_for_one_aligned_two_opposite()
 
     events = detect_macro_fvgs(bars)
 
-    event = events.iloc[0]
+    event = events.row(0, named=True)
     assert event["fvg_side"] == "bearish"
     assert event["bar1_direction"] == "bullish"
     assert event["bar2_direction"] == "bullish"
@@ -363,7 +379,7 @@ def test_detect_macro_fvg_marks_contains_neutral_when_pattern_has_doji():
 
     events = detect_macro_fvgs(bars)
 
-    event = events.iloc[0]
+    event = events.row(0, named=True)
     assert event["bar2_direction"] == "neutral"
     assert event["bar3_direction"] == "neutral"
     assert event["aligned_count"] == 1
@@ -404,7 +420,7 @@ def test_excludes_new_detection_assigned_at_1559():
 
     events = detect_macro_fvgs(bars)
 
-    assert events.empty
+    assert events.is_empty()
 
 
 def test_does_not_detect_fvg_across_day_boundary():
@@ -439,7 +455,7 @@ def test_does_not_detect_fvg_across_day_boundary():
 
     events = detect_macro_fvgs(bars)
 
-    assert events.empty
+    assert events.is_empty()
 
 
 def test_marks_retrace_without_invalidation():
@@ -491,10 +507,10 @@ def test_marks_retrace_without_invalidation():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    assert len(scanned) == 1
-    event = scanned.iloc[0]
-    assert event["first_retrace_at"] == pd.Timestamp("2025-01-02 15:52:00")
-    assert pd.isna(event["first_invalidation_at"])
+    assert scanned.height == 1
+    event = scanned.row(0, named=True)
+    assert event["first_retrace_at"] == datetime(2025, 1, 2, 15, 52)
+    assert is_nullish(event["first_invalidation_at"])
     assert event["retraced_by_1559"]
     assert not event["invalidated_by_1559"]
     assert event["held_to_1559_close"]
@@ -542,9 +558,9 @@ def test_marks_same_bar_retrace_and_invalidation():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
-    assert event["first_retrace_at"] == pd.Timestamp("2025-01-02 15:52:00")
-    assert event["first_invalidation_at"] == pd.Timestamp("2025-01-02 15:52:00")
+    event = scanned.row(0, named=True)
+    assert event["first_retrace_at"] == datetime(2025, 1, 2, 15, 52)
+    assert event["first_invalidation_at"] == datetime(2025, 1, 2, 15, 52)
     assert event["retraced_by_1559"]
     assert event["invalidated_by_1559"]
     assert not event["held_to_1559_close"]
@@ -591,8 +607,8 @@ def test_stores_first_retrace_candle_metadata_for_bullish_fvg():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
-    assert event["first_retrace_candle_at"] == pd.Timestamp("2025-01-02 15:54:00")
+    event = scanned.row(0, named=True)
+    assert event["first_retrace_candle_at"] == datetime(2025, 1, 2, 15, 54)
     assert event["first_retrace_candle_open"] == 102.5
     assert event["first_retrace_candle_high"] == 102.8
     assert event["first_retrace_candle_low"] == 101.2
@@ -639,12 +655,12 @@ def test_marks_later_same_side_4_bar_fvg_as_stacked_continuation():
 
     events = detect_macro_fvgs(bars)
 
-    first_event = events[events["assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")].iloc[0]
-    second_event = events[events["assigned_at"] == pd.Timestamp("2025-01-02 15:51:00")].iloc[0]
+    first_event = filter_one(events, pl.col("assigned_at") == datetime(2025, 1, 2, 15, 50))
+    second_event = filter_one(events, pl.col("assigned_at") == datetime(2025, 1, 2, 15, 51))
     assert not first_event["stacked_continuation_fvg"]
-    assert pd.isna(first_event["stack_predecessor_assigned_at"])
+    assert is_nullish(first_event["stack_predecessor_assigned_at"])
     assert second_event["stacked_continuation_fvg"]
-    assert second_event["stack_predecessor_assigned_at"] == pd.Timestamp("2025-01-02 15:50:00")
+    assert second_event["stack_predecessor_assigned_at"] == datetime(2025, 1, 2, 15, 50)
 
 
 def test_marks_bullish_fvg_successful_when_later_breaks_first_retrace_high():
@@ -696,11 +712,11 @@ def test_marks_bullish_fvg_successful_when_later_breaks_first_retrace_high():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert event["first_retrace_candle_high"] == 102.8
     assert event["success_reference_price"] == 102.8
     assert event["successful_by_1559"]
-    assert event["success_break_at"] == pd.Timestamp("2025-01-02 15:56:00")
+    assert event["success_break_at"] == datetime(2025, 1, 2, 15, 56)
 
 
 def test_marks_bearish_fvg_successful_when_later_breaks_first_retrace_low():
@@ -752,11 +768,11 @@ def test_marks_bearish_fvg_successful_when_later_breaks_first_retrace_low():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert event["first_retrace_candle_low"] == 96.2
     assert event["success_reference_price"] == 96.2
     assert event["successful_by_1559"]
-    assert event["success_break_at"] == pd.Timestamp("2025-01-02 15:55:00")
+    assert event["success_break_at"] == datetime(2025, 1, 2, 15, 55)
 
 
 def test_retraced_fvg_can_remain_unsuccessful_by_1559():
@@ -816,11 +832,11 @@ def test_retraced_fvg_can_remain_unsuccessful_by_1559():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert event["retraced_by_1559"]
     assert event["success_reference_price"] == 102.8
     assert not event["successful_by_1559"]
-    assert pd.isna(event["success_break_at"])
+    assert is_nullish(event["success_break_at"])
 
 
 def test_no_retrace_keeps_success_context_null():
@@ -872,11 +888,11 @@ def test_no_retrace_keeps_success_context_null():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
-    assert pd.isna(event["first_retrace_candle_at"])
-    assert pd.isna(event["success_reference_price"])
+    event = scanned.row(0, named=True)
+    assert is_nullish(event["first_retrace_candle_at"])
+    assert is_nullish(event["success_reference_price"])
     assert not event["successful_by_1559"]
-    assert pd.isna(event["success_break_at"])
+    assert is_nullish(event["success_break_at"])
 
 
 def test_marks_unconfirmable_late_fvg():
@@ -912,11 +928,11 @@ def test_marks_unconfirmable_late_fvg():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    assert len(scanned) == 1
-    event = scanned.iloc[0]
+    assert scanned.height == 1
+    event = scanned.row(0, named=True)
     assert not event["is_confirmable_by_1559"]
-    assert pd.isna(event["first_retrace_at"])
-    assert pd.isna(event["first_invalidation_at"])
+    assert is_nullish(event["first_retrace_at"])
+    assert is_nullish(event["first_invalidation_at"])
 
 
 def test_bullish_entry_trigger_and_excursions_use_bar3_high():
@@ -968,11 +984,11 @@ def test_bullish_entry_trigger_and_excursions_use_bar3_high():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert event["fvg_side"] == "bullish"
     assert event["entry_price"] == 103.0
     assert event["entry_triggered_by_1559"]
-    assert event["first_entry_trigger_at"] == pd.Timestamp("2025-01-02 15:54:00")
+    assert event["first_entry_trigger_at"] == datetime(2025, 1, 2, 15, 54)
     assert event["entry_trigger_minute_hhmm"] == "15:54"
     assert event["entry_trigger_minute_index"] == 4
     assert event["mfe_pct_to_1559"] == pytest.approx((105.0 - 103.0) / 103.0)
@@ -1028,11 +1044,11 @@ def test_bearish_entry_trigger_and_excursions_use_bar3_low():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert event["fvg_side"] == "bearish"
     assert event["entry_price"] == 94.0
     assert event["entry_triggered_by_1559"]
-    assert event["first_entry_trigger_at"] == pd.Timestamp("2025-01-02 15:53:00")
+    assert event["first_entry_trigger_at"] == datetime(2025, 1, 2, 15, 53)
     assert event["entry_trigger_minute_hhmm"] == "15:53"
     assert event["entry_trigger_minute_index"] == 3
     assert event["mfe_pct_to_1559"] == pytest.approx((94.0 - 92.0) / 94.0)
@@ -1088,13 +1104,13 @@ def test_entry_excursion_fields_stay_null_when_entry_never_triggers():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert not event["entry_triggered_by_1559"]
-    assert pd.isna(event["first_entry_trigger_at"])
-    assert pd.isna(event["entry_trigger_minute_hhmm"])
-    assert pd.isna(event["entry_trigger_minute_index"])
-    assert pd.isna(event["mfe_pct_to_1559"])
-    assert pd.isna(event["mae_pct_to_1559"])
+    assert is_nullish(event["first_entry_trigger_at"])
+    assert is_nullish(event["entry_trigger_minute_hhmm"])
+    assert is_nullish(event["entry_trigger_minute_index"])
+    assert is_nullish(event["mfe_pct_to_1559"])
+    assert is_nullish(event["mae_pct_to_1559"])
 
 
 def test_entry_trigger_on_1559_sets_trigger_without_excursions():
@@ -1138,17 +1154,17 @@ def test_entry_trigger_on_1559_sets_trigger_without_excursions():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert event["entry_triggered_by_1559"]
-    assert event["first_entry_trigger_at"] == pd.Timestamp("2025-01-02 15:59:00")
+    assert event["first_entry_trigger_at"] == datetime(2025, 1, 2, 15, 59)
     assert event["entry_trigger_minute_hhmm"] == "15:59"
     assert event["entry_trigger_minute_index"] == 9
-    assert pd.isna(event["mfe_pct_to_1559"])
-    assert pd.isna(event["mae_pct_to_1559"])
+    assert is_nullish(event["mfe_pct_to_1559"])
+    assert is_nullish(event["mae_pct_to_1559"])
 
 
 def test_builds_stage_and_transition_summary_rates():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "fvg_side": "bullish",
@@ -1194,26 +1210,21 @@ def test_builds_stage_and_transition_summary_rates():
 
     summary = build_stage_summary_tables(events)
 
-    assert set(summary["summary_scope"]) == {"stage_1", "stage_2", "stage_1_to_stage_2"}
+    assert set(summary["summary_scope"].to_list()) == {"stage_1", "stage_2", "stage_1_to_stage_2"}
 
-    stage_1_bull = summary[
-        (summary["summary_scope"] == "stage_1") & (summary["fvg_side"] == "bullish")
-    ].iloc[0]
+    stage_1_bull = filter_one(summary, (pl.col("summary_scope") == "stage_1") & (pl.col("fvg_side") == "bullish"))
     assert stage_1_bull["n_total"] == 1
     assert stage_1_bull["n_confirmable"] == 1
     assert stage_1_bull["hold_rate"] == 1.0
     assert stage_1_bull["retrace_rate"] == 1.0
 
-    transition_bear = summary[
-        (summary["summary_scope"] == "stage_1_to_stage_2")
-        & (summary["fvg_side"] == "bearish")
-    ].iloc[0]
+    transition_bear = filter_one(summary, (pl.col("summary_scope") == "stage_1_to_stage_2") & (pl.col("fvg_side") == "bearish"))
     assert transition_bear["invalidation_rate"] == 1.0
     assert transition_bear["untouched_rate"] == 1.0
 
 
 def test_builds_creation_minute_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "assigned_minute_index": 0,
@@ -1240,7 +1251,7 @@ def test_builds_creation_minute_summary():
 
     minute_summary = build_creation_minute_summary(events)
 
-    row = minute_summary.iloc[0]
+    row = minute_summary.row(0, named=True)
     assert row["assigned_minute_hhmm"] == "15:50"
     assert row["assigned_minute_index"] == 0
     assert row["n_total"] == 2
@@ -1250,7 +1261,7 @@ def test_builds_creation_minute_summary():
 
 
 def test_builds_alignment_bucket_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "3_aligned",
@@ -1280,7 +1291,7 @@ def test_builds_alignment_bucket_summary():
 
     summary = summary_builder(events)
 
-    row = summary.iloc[0]
+    row = summary.row(0, named=True)
     assert row["summary_scope"] == "alignment_bucket"
     assert row["alignment_bucket"] == "3_aligned"
     assert row["n_total"] == 2
@@ -1289,7 +1300,7 @@ def test_builds_alignment_bucket_summary():
 
 
 def test_builds_alignment_bucket_minute_block_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "2_aligned_1_opposite",
@@ -1319,15 +1330,15 @@ def test_builds_alignment_bucket_minute_block_summary():
 
     summary = summary_builder(events)
 
-    assert set(summary["minute_block"]) == {"15:50-15:52", "15:53-15:57"}
-    early_row = summary[summary["minute_block"] == "15:50-15:52"].iloc[0]
+    assert set(summary["minute_block"].to_list()) == {"15:50-15:52", "15:53-15:57"}
+    early_row = filter_one(summary, pl.col("minute_block") == "15:50-15:52")
     assert early_row["summary_scope"] == "alignment_bucket_minute_block"
     assert early_row["alignment_bucket"] == "2_aligned_1_opposite"
     assert early_row["hold_rate"] == 1.0
 
 
 def test_builds_alignment_bucket_gap_bucket_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "contains_neutral",
@@ -1358,11 +1369,11 @@ def test_builds_alignment_bucket_gap_bucket_summary():
     summary = summary_builder(events)
 
     assert summary["summary_scope"].eq("alignment_bucket_gap_bucket").all()
-    assert set(summary["gap_size_bucket_225"]) == {"<2.25", ">=2.25"}
+    assert set(summary["gap_size_bucket_225"].to_list()) == {"<2.25", ">=2.25"}
 
 
 def test_builds_entry_excursion_alignment_bucket_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "3_aligned",
@@ -1394,7 +1405,7 @@ def test_builds_entry_excursion_alignment_bucket_summary():
 
     summary = summary_builder(events)
 
-    row = summary.iloc[0]
+    row = summary.row(0, named=True)
     assert row["summary_scope"] == "entry_excursion_alignment_bucket"
     assert row["alignment_bucket"] == "3_aligned"
     assert row["n_confirmable"] == 2
@@ -1405,7 +1416,7 @@ def test_builds_entry_excursion_alignment_bucket_summary():
 
 
 def test_builds_entry_excursion_alignment_bucket_minute_block_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "2_aligned_1_opposite",
@@ -1446,7 +1457,7 @@ def test_builds_entry_excursion_alignment_bucket_minute_block_summary():
 
     summary = summary_builder(events)
 
-    early_row = summary[summary["minute_block"] == "15:50-15:52"].iloc[0]
+    early_row = filter_one(summary, pl.col("minute_block") == "15:50-15:52")
     assert early_row["summary_scope"] == "entry_excursion_alignment_bucket_minute_block"
     assert early_row["alignment_bucket"] == "2_aligned_1_opposite"
     assert early_row["n_confirmable"] == 2
@@ -1457,7 +1468,7 @@ def test_builds_entry_excursion_alignment_bucket_minute_block_summary():
 
 
 def test_builds_entry_excursion_gap_bucket_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "contains_neutral",
@@ -1490,7 +1501,7 @@ def test_builds_entry_excursion_gap_bucket_summary():
     summary = summary_builder(events)
 
     assert summary["summary_scope"].eq("entry_excursion_gap_bucket").all()
-    low_gap_row = summary[summary["gap_size_bucket_225"] == "<2.25"].iloc[0]
+    low_gap_row = filter_one(summary, pl.col("gap_size_bucket_225") == "<2.25")
     assert low_gap_row["n_confirmable"] == 1
     assert low_gap_row["n_triggered"] == 1
     assert low_gap_row["entry_trigger_rate"] == 1.0
@@ -1499,7 +1510,7 @@ def test_builds_entry_excursion_gap_bucket_summary():
 
 
 def test_builds_success_context_alignment_bucket_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "3_aligned",
@@ -1540,7 +1551,7 @@ def test_builds_success_context_alignment_bucket_summary():
 
     summary = summary_builder(events)
 
-    row = summary.iloc[0]
+    row = summary.row(0, named=True)
     assert row["summary_scope"] == "success_context_alignment_bucket"
     assert row["alignment_bucket"] == "3_aligned"
     assert row["n_confirmable"] == 3
@@ -1558,7 +1569,7 @@ def test_builds_success_context_alignment_bucket_summary():
 
 
 def test_builds_success_context_stacked_flag_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "2_aligned_1_opposite",
@@ -1599,7 +1610,7 @@ def test_builds_success_context_stacked_flag_summary():
 
     summary = summary_builder(events)
 
-    stacked_row = summary[summary["stacked_continuation_fvg"]].iloc[0]
+    stacked_row = filter_one(summary, pl.col("stacked_continuation_fvg"))
     assert stacked_row["summary_scope"] == "success_context_stacked_flag"
     assert stacked_row["n_confirmable"] == 2
     assert stacked_row["n_retraced"] == 2
@@ -1616,7 +1627,7 @@ def test_builds_success_context_stacked_flag_summary():
 
 
 def test_builds_success_context_alignment_bucket_stacked_flag_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "alignment_bucket": "3_aligned",
@@ -1657,10 +1668,7 @@ def test_builds_success_context_alignment_bucket_stacked_flag_summary():
 
     summary = summary_builder(events)
 
-    row = summary[
-        (summary["alignment_bucket"] == "3_aligned")
-        & (summary["stacked_continuation_fvg"])
-    ].iloc[0]
+    row = filter_one(summary, (pl.col("alignment_bucket") == "3_aligned") & pl.col("stacked_continuation_fvg"))
     assert row["summary_scope"] == "success_context_alignment_bucket_stacked_flag"
     assert row["n_confirmable"] == 2
     assert row["n_retraced"] == 2
@@ -1679,7 +1687,7 @@ def test_plot_successful_fvg_mae_by_alignment_bucket_overlays_success_rate(
     tmp_path,
     monkeypatch,
 ):
-    summary = pd.DataFrame(
+    summary = pl.DataFrame(
         [
             {
                 "summary_scope": "success_context_alignment_bucket",
@@ -1720,7 +1728,7 @@ def test_plot_successful_fvg_mae_by_alignment_bucket_overlays_success_rate(
 
 
 def test_builds_bar2_volume_bucket_summary():
-    events = pd.DataFrame(
+    events = pl.DataFrame(
         [
             {
                 "assigned_minute_index": 0,
@@ -1768,7 +1776,7 @@ def test_builds_bar2_volume_bucket_summary():
     summary = build_bar2_volume_summary(events, bucket_count=2)
 
     assert "bar2_volume_bucket" in summary.columns
-    assert len(summary) == 2
+    assert summary.height == 2
     assert summary["n_total"].sum() == 4
 
 
@@ -1829,7 +1837,7 @@ def test_tracks_stage_1_outcomes_during_stage_2_window():
     events = detect_macro_fvgs(bars)
     scanned = scan_fvg_outcomes_until_1559_close(events, bars)
 
-    event = scanned.iloc[0]
+    event = scanned.row(0, named=True)
     assert event["retraced_in_stage_2"]
     assert not event["invalidated_in_stage_2"]
     assert event["held_through_stage_2"]
@@ -1910,7 +1918,7 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
             },
         ]
     )
-    bars.to_parquet(input_path, index=False)
+    bars.write_parquet(input_path)
 
     run_macro_fvg_study(
         input_path=input_path,
@@ -1919,16 +1927,16 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
         figures_dir=figures_dir,
     )
 
-    events = pd.read_parquet(events_path)
-    summary = pd.read_parquet(summary_path)
+    events = pl.read_parquet(events_path)
+    summary = pl.read_parquet(summary_path)
 
     assert events_path.exists()
     assert summary_path.exists()
     assert "successful_by_1559" in events.columns
     assert "stacked_continuation_fvg" in events.columns
     assert "first_retrace_candle_at" in events.columns
-    assert "success_context_alignment_bucket" in set(summary["summary_scope"])
-    assert "success_context_stacked_flag" in set(summary["summary_scope"])
+    assert "success_context_alignment_bucket" in set(summary["summary_scope"].to_list())
+    assert "success_context_stacked_flag" in set(summary["summary_scope"].to_list())
     assert (figures_dir / "hold_vs_invalidate_by_side.png").exists()
     assert (figures_dir / "stage1_to_stage2_outcomes.png").exists()
     assert (figures_dir / "creation_minute_outcome_heatmap.png").exists()
