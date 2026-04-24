@@ -30,8 +30,8 @@ def process_file(input_path: str, output_dir: str):
     df = load_minute_bars(input_path)
     out_path = build_output_path(input_path, output_dir)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(out_path, index=False)
-    print(f"Wrote {len(df):,} rows → {out_path}")
+    df.write_parquet(out_path)
+    print(f"Wrote {df.height:,} rows → {out_path}")
     return out_path
 
 

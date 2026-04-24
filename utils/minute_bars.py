@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 
 MARKET_TZ = "America/New_York"
 UTC = "UTC"
@@ -10,98 +10,109 @@ BASE_COLUMNS = ["datetime_utc", "Open", "High", "Low", "Close", "Volume"]
 OPTIONAL_BASE_COLUMNS = ["instrument"]
 
 
-def _read_any(path: str | Path) -> pd.DataFrame:
+def _read_any(path: str | Path) -> pl.DataFrame:
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".parquet":
-        return pd.read_parquet(path)
+        return pl.read_parquet(path)
     if suffix == ".csv":
-        return pd.read_csv(path)
+        return pl.read_csv(path, try_parse_dates=True)
     raise ValueError(f"Unsupported input format: {path}")
 
 
-def _coerce_utc(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series, utc=True, errors="coerce")
+def _to_utc_expr(column: str) -> pl.Expr:
+    dtype = pl.col(column).cast(pl.String).str.to_datetime(time_zone=UTC, strict=False)
+    return pl.when(pl.col(column).is_not_null()).then(dtype).otherwise(None).alias("datetime_utc")
 
 
-def _coerce_et_to_utc(series: pd.Series) -> pd.Series:
-    dt = pd.to_datetime(series, errors="coerce")
-    if isinstance(dt.dtype, pd.DatetimeTZDtype):
-        return dt.dt.tz_convert(UTC)
-    localized = dt.dt.tz_localize(
-        MARKET_TZ,
-        ambiguous="NaT",
-        nonexistent="shift_forward",
+def _et_to_utc_expr(column: str) -> pl.Expr:
+    return (
+        pl.col(column)
+        .cast(pl.String)
+        .str.to_datetime(time_zone=MARKET_TZ, strict=True)
+        .dt.convert_time_zone(UTC)
+        .alias("datetime_utc")
     )
-    if localized.isna().any() and dt.notna().any():
-        raise ValueError(
-            "Legacy ET timestamps contain ambiguous DST-fallback values; provide datetime_utc instead."
-        )
-    return localized.dt.tz_convert(UTC)
 
 
-def normalize_minute_bars(df: pd.DataFrame) -> pd.DataFrame:
-    work = df.copy()
+def normalize_minute_bars(df: pl.DataFrame) -> pl.DataFrame:
+    work = df.clone()
 
     if "datetime_utc" in work.columns:
-        datetime_utc = _coerce_utc(work["datetime_utc"])
+        work = work.with_columns(_to_utc_expr("datetime_utc"))
     elif "DateTime_UTC" in work.columns:
-        datetime_utc = _coerce_utc(work["DateTime_UTC"])
+        work = work.with_columns(_to_utc_expr("DateTime_UTC"))
     elif "DateTime_ET" in work.columns:
-        datetime_utc = _coerce_et_to_utc(work["DateTime_ET"])
+        try:
+            work = work.with_columns(_et_to_utc_expr("DateTime_ET"))
+        except Exception as exc:
+            raise ValueError(
+                "Legacy ET timestamps contain ambiguous DST-fallback values; provide datetime_utc instead."
+            ) from exc
     elif "datetime_et" in work.columns:
-        datetime_utc = _coerce_et_to_utc(work["datetime_et"])
+        try:
+            work = work.with_columns(_et_to_utc_expr("datetime_et"))
+        except Exception as exc:
+            raise ValueError(
+                "Legacy ET timestamps contain ambiguous DST-fallback values; provide datetime_utc instead."
+            ) from exc
     else:
         raise ValueError("Expected one of: datetime_utc, DateTime_UTC, DateTime_ET, datetime_et")
 
-    if datetime_utc.isna().any():
+    if work.select(pl.col("datetime_utc").is_null().any()).item():
         raise ValueError("Timestamp column contains unparsable values")
 
     missing = [column for column in ["Open", "High", "Low", "Close", "Volume"] if column not in work.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    work["datetime_utc"] = datetime_utc
     columns = BASE_COLUMNS + [column for column in OPTIONAL_BASE_COLUMNS if column in work.columns]
-    out = work[columns].copy()
-    out = out.sort_values("datetime_utc").reset_index(drop=True)
+    out = work.select(columns).sort("datetime_utc")
 
-    if out["datetime_utc"].duplicated().any():
+    if out.select(pl.col("datetime_utc").is_duplicated().any()).item():
         raise ValueError("Duplicate datetime_utc values after normalization")
 
     return out
 
 
-def load_minute_bars(path: str | Path) -> pd.DataFrame:
+def load_minute_bars(path: str | Path) -> pl.DataFrame:
     return normalize_minute_bars(_read_any(path))
 
 
-def build_market_time_columns(df: pd.DataFrame) -> pd.DataFrame:
-    work = df.copy()
-    if "datetime_utc" not in work.columns:
+def build_market_time_columns(df: pl.DataFrame) -> pl.DataFrame:
+    if "datetime_utc" not in df.columns:
         raise ValueError("Expected canonical datetime_utc column")
 
-    datetime_et = pd.to_datetime(work["datetime_utc"], utc=True).dt.tz_convert(MARKET_TZ).dt.tz_localize(None)
-    work["datetime_et"] = datetime_et
-    work["date_et"] = datetime_et.dt.normalize()
-    work["time_et"] = datetime_et.dt.time
-    work["minute_of_day_et"] = datetime_et.dt.hour * 60 + datetime_et.dt.minute
-    return work
+    return df.with_columns(
+        datetime_et=pl.col("datetime_utc").dt.convert_time_zone(MARKET_TZ).dt.replace_time_zone(None),
+    ).with_columns(
+        date_et=pl.col("datetime_et").dt.date(),
+        time_et=pl.col("datetime_et").dt.time(),
+        minute_of_day_et=pl.col("datetime_et").dt.hour().cast(pl.Int32) * 60 + pl.col("datetime_et").dt.minute().cast(pl.Int32),
+    )
 
 
-def derive_session_window(df: pd.DataFrame) -> pd.DataFrame:
-    work = build_market_time_columns(df) if "minute_of_day_et" not in df.columns else df.copy()
-    mins = work["minute_of_day_et"]
+def derive_session_window(df: pl.DataFrame) -> pl.DataFrame:
+    work = build_market_time_columns(df) if "minute_of_day_et" not in df.columns else df.clone()
+    mins = pl.col("minute_of_day_et")
 
-    work["session"] = "OTHER"
-    work.loc[(mins >= 19 * 60) & (mins < 24 * 60), "session"] = "ASIA"
-    work.loc[(mins >= 2 * 60) & (mins < 5 * 60), "session"] = "LONDON"
-    work.loc[(mins >= 9 * 60 + 30) & (mins < 11 * 60), "session"] = "NYAM"
-    work.loc[(mins >= 12 * 60) & (mins < 13 * 60), "session"] = "LUNCH"
-    work.loc[(mins >= 13 * 60) & (mins < 15 * 60), "session"] = "PM"
-
-    work["window"] = "NONE"
-    work.loc[(mins >= 15 * 60) & (mins <= 15 * 60 + 49), "window"] = "H3PM"
-    work.loc[(mins >= 15 * 60 + 50) & (mins <= 15 * 60 + 59), "window"] = "MACRO"
-    work.loc[(mins >= 16 * 60) & (mins <= 16 * 60 + 10), "window"] = "POST"
-    return work
+    return work.with_columns(
+        session=pl.when((mins >= 19 * 60) & (mins < 24 * 60))
+        .then(pl.lit("ASIA"))
+        .when((mins >= 2 * 60) & (mins < 5 * 60))
+        .then(pl.lit("LONDON"))
+        .when((mins >= 9 * 60 + 30) & (mins < 11 * 60))
+        .then(pl.lit("NYAM"))
+        .when((mins >= 12 * 60) & (mins < 13 * 60))
+        .then(pl.lit("LUNCH"))
+        .when((mins >= 13 * 60) & (mins < 15 * 60))
+        .then(pl.lit("PM"))
+        .otherwise(pl.lit("OTHER")),
+        window=pl.when((mins >= 15 * 60) & (mins <= 15 * 60 + 49))
+        .then(pl.lit("H3PM"))
+        .when((mins >= 15 * 60 + 50) & (mins <= 15 * 60 + 59))
+        .then(pl.lit("MACRO"))
+        .when((mins >= 16 * 60) & (mins <= 16 * 60 + 10))
+        .then(pl.lit("POST"))
+        .otherwise(pl.lit("NONE")),
+    )
