@@ -2,7 +2,8 @@
 import os
 from pathlib import Path
 import numpy as np
-import pandas as pd
+import polars as pl
+pd = __import__("pandas")
 import matplotlib.pyplot as plt
 
 # =============================
@@ -31,9 +32,9 @@ def _coerce_datetime(series):
 def read_bars(path: str) -> pd.DataFrame:
     ext = Path(path).suffix.lower()
     if ext == ".parquet":
-        df = pd.read_parquet(path)
+        df = pl.read_parquet(path).to_pandas()
     elif ext == ".csv":
-        df = pd.read_csv(path)
+        df = pl.read_csv(path).to_pandas()
     else:
         raise ValueError("Unsupported file extension. Use .csv or .parquet")
 
