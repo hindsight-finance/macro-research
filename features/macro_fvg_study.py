@@ -5,7 +5,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import polars as pl
+pd = __import__("pandas")
 
 try:
     from utils.minute_bars import (
@@ -74,10 +75,17 @@ SUMMARY_COLUMNS = [
 ]
 
 
-def _prepare_macro_bars(df: pd.DataFrame) -> pd.DataFrame:
+def _to_pandas(df):
+    return df.to_pandas() if isinstance(df, pl.DataFrame) else df
+
+def _from_pandas(df):
+    return pl.from_pandas(df)
+
+def _prepare_macro_bars(df):
+    if not isinstance(df, pl.DataFrame):
+        df = pl.from_pandas(df)
     work = derive_session_window(build_market_time_columns(normalize_minute_bars(df)))
-    work["DateTime_ET"] = work["datetime_et"]
-    return work.sort_values("DateTime_ET").reset_index(drop=True)
+    return work.with_columns(DateTime_ET=pl.col("datetime_et")).sort("DateTime_ET").to_pandas()
 
 
 def assign_stage(ts: pd.Timestamp) -> str:
@@ -152,7 +160,7 @@ def _calculate_excursions_from_entry(
     return float(mfe_pct), float(mae_pct)
 
 
-def mark_stacked_continuation_fvgs(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_mark_stacked_continuation_fvgs(events: pd.DataFrame) -> pd.DataFrame:
     work = events.copy()
     work["stacked_continuation_fvg"] = False
     work["stack_predecessor_assigned_at"] = pd.NaT
@@ -172,7 +180,7 @@ def mark_stacked_continuation_fvgs(events: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
-def detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
+def _pd_detect_macro_fvgs(df: pd.DataFrame) -> pd.DataFrame:
     required = {"Open", "High", "Low", "Close", "Volume"}
     missing = required.difference(df.columns)
     if missing:
@@ -360,7 +368,7 @@ def _bar_breaks_retrace_reference(bar: pd.Series, fvg_side: str, reference_price
     return float(bar["Low"]) < reference_price
 
 
-def scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame) -> pd.DataFrame:
+def _pd_scan_fvg_outcomes_until_1559_close(events: pd.DataFrame, bars: pd.DataFrame) -> pd.DataFrame:
     if events.empty:
         return events.copy()
 
@@ -810,7 +818,7 @@ def _group_success_context_stats(
     return pd.DataFrame(rows).reindex(columns=SUMMARY_COLUMNS)
 
 
-def build_creation_minute_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_creation_minute_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_outcome_rates(
         events,
         ["assigned_minute_index", "assigned_minute_hhmm"],
@@ -836,7 +844,7 @@ def _add_bar2_volume_bucket(events: pd.DataFrame, bucket_count: int = 4) -> pd.D
     return work
 
 
-def build_bar2_volume_summary(events: pd.DataFrame, bucket_count: int = 4) -> pd.DataFrame:
+def _pd_build_bar2_volume_summary(events: pd.DataFrame, bucket_count: int = 4) -> pd.DataFrame:
     if events.empty:
         return _empty_summary_table()
 
@@ -844,11 +852,11 @@ def build_bar2_volume_summary(events: pd.DataFrame, bucket_count: int = 4) -> pd
     return _group_outcome_rates(work, ["bar2_volume_bucket"], "bar2_volume_bucket")
 
 
-def build_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_outcome_rates(events, ["alignment_bucket"], "alignment_bucket")
 
 
-def build_alignment_bucket_minute_block_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_alignment_bucket_minute_block_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_outcome_rates(
         events,
         ["minute_block", "alignment_bucket"],
@@ -856,7 +864,7 @@ def build_alignment_bucket_minute_block_summary(events: pd.DataFrame) -> pd.Data
     )
 
 
-def build_alignment_bucket_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_alignment_bucket_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_outcome_rates(
         events,
         ["gap_size_bucket_225", "alignment_bucket"],
@@ -864,11 +872,11 @@ def build_alignment_bucket_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFr
     )
 
 
-def build_entry_excursion_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_entry_excursion_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_entry_excursion_stats(events, [], "entry_excursion_overall")
 
 
-def build_entry_excursion_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_entry_excursion_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_entry_excursion_stats(
         events,
         ["alignment_bucket"],
@@ -876,7 +884,7 @@ def build_entry_excursion_alignment_bucket_summary(events: pd.DataFrame) -> pd.D
     )
 
 
-def build_entry_excursion_minute_block_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_entry_excursion_minute_block_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_entry_excursion_stats(
         events,
         ["minute_block"],
@@ -884,7 +892,7 @@ def build_entry_excursion_minute_block_summary(events: pd.DataFrame) -> pd.DataF
     )
 
 
-def build_entry_excursion_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_entry_excursion_gap_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_entry_excursion_stats(
         events,
         ["gap_size_bucket_225"],
@@ -902,11 +910,11 @@ def build_entry_excursion_alignment_bucket_minute_block_summary(
     )
 
 
-def build_success_context_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_success_context_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_success_context_stats(events, [], "success_context_overall")
 
 
-def build_success_context_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_success_context_alignment_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_success_context_stats(
         events,
         ["alignment_bucket"],
@@ -914,7 +922,7 @@ def build_success_context_alignment_bucket_summary(events: pd.DataFrame) -> pd.D
     )
 
 
-def build_success_context_stacked_flag_summary(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_success_context_stacked_flag_summary(events: pd.DataFrame) -> pd.DataFrame:
     return _group_success_context_stats(
         events,
         ["stacked_continuation_fvg"],
@@ -922,7 +930,7 @@ def build_success_context_stacked_flag_summary(events: pd.DataFrame) -> pd.DataF
     )
 
 
-def build_success_context_alignment_bucket_stacked_flag_summary(
+def _pd_build_success_context_alignment_bucket_stacked_flag_summary(
     events: pd.DataFrame,
 ) -> pd.DataFrame:
     return _group_success_context_stats(
@@ -932,7 +940,7 @@ def build_success_context_alignment_bucket_stacked_flag_summary(
     )
 
 
-def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
     stage_1 = events[events["assigned_stage"] == "stage_1"]
     stage_2 = events[events["assigned_stage"] == "stage_2"]
     frames = [
@@ -967,7 +975,7 @@ def build_stage_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(non_empty_frames, ignore_index=True).reindex(columns=SUMMARY_COLUMNS)
 
 
-def build_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
+def _pd_build_summary_tables(events: pd.DataFrame) -> pd.DataFrame:
     frames = [
         build_stage_summary_tables(events),
         build_creation_minute_summary(events),
@@ -1735,6 +1743,67 @@ def plot_fvg_summary_figures(events: pd.DataFrame, summary: pd.DataFrame, figure
     plot_successful_fvg_mfe_by_alignment_bucket(summary, figures_dir)
     plot_successful_fvg_mfe_by_stacked_flag(summary, figures_dir)
 
+
+
+
+def _wrap_frame_result(func, *args, **kwargs):
+    converted = [_to_pandas(arg) if isinstance(arg, pl.DataFrame) else arg for arg in args]
+    result = func(*converted, **kwargs)
+    return result
+
+def mark_stacked_continuation_fvgs(events):
+    return _wrap_frame_result(_pd_mark_stacked_continuation_fvgs, events)
+
+def detect_macro_fvgs(df):
+    return _wrap_frame_result(_pd_detect_macro_fvgs, df)
+
+def scan_fvg_outcomes_until_1559_close(events, bars):
+    return _wrap_frame_result(_pd_scan_fvg_outcomes_until_1559_close, events, bars)
+
+def build_stage_summary_tables(events):
+    return _wrap_frame_result(_pd_build_stage_summary_tables, events)
+
+def build_summary_tables(events):
+    return _wrap_frame_result(_pd_build_summary_tables, events)
+
+def build_creation_minute_summary(events):
+    return _wrap_frame_result(_pd_build_creation_minute_summary, events)
+
+def build_bar2_volume_summary(events, bucket_count=4):
+    return _wrap_frame_result(_pd_build_bar2_volume_summary, events, bucket_count=bucket_count)
+
+def build_alignment_bucket_summary(events):
+    return _wrap_frame_result(_pd_build_alignment_bucket_summary, events)
+
+def build_alignment_bucket_minute_block_summary(events):
+    return _wrap_frame_result(_pd_build_alignment_bucket_minute_block_summary, events)
+
+def build_alignment_bucket_gap_bucket_summary(events):
+    return _wrap_frame_result(_pd_build_alignment_bucket_gap_bucket_summary, events)
+
+def build_entry_excursion_summary(events):
+    return _wrap_frame_result(_pd_build_entry_excursion_summary, events)
+
+def build_entry_excursion_alignment_bucket_summary(events):
+    return _wrap_frame_result(_pd_build_entry_excursion_alignment_bucket_summary, events)
+
+def build_entry_excursion_minute_block_summary(events):
+    return _wrap_frame_result(_pd_build_entry_excursion_minute_block_summary, events)
+
+def build_entry_excursion_gap_bucket_summary(events):
+    return _wrap_frame_result(_pd_build_entry_excursion_gap_bucket_summary, events)
+
+def build_success_context_summary(events):
+    return _wrap_frame_result(_pd_build_success_context_summary, events)
+
+def build_success_context_alignment_bucket_summary(events):
+    return _wrap_frame_result(_pd_build_success_context_alignment_bucket_summary, events)
+
+def build_success_context_stacked_flag_summary(events):
+    return _wrap_frame_result(_pd_build_success_context_stacked_flag_summary, events)
+
+def build_success_context_alignment_bucket_stacked_flag_summary(events):
+    return _wrap_frame_result(_pd_build_success_context_alignment_bucket_stacked_flag_summary, events)
 
 def run_macro_fvg_study(
     input_path: Path = INPUT_PATH,
