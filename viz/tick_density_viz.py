@@ -157,6 +157,12 @@ def summarize_tick_density_dataset(path: str | Path, alpha: float = NORMALITY_AL
     )
 
 
+
+def _plot_x_positions_and_labels(index_values: pd.Series) -> tuple[list[int], list[str]]:
+    labels = [str(int(value)) for value in index_values.tolist()]
+    positions = list(range(len(labels)))
+    return positions, labels
+
 def _label_for_index_column(index_column: str) -> str:
     return "Macro minute index" if index_column == "macro_minute_index" else "5-second bucket index"
 
@@ -170,28 +176,29 @@ def _plot_metric_bands(
     out_path: Path,
     subtitle: str | None = None,
 ) -> None:
-    x = stats_df[index_column].to_numpy()
+    x_positions, x_labels = _plot_x_positions_and_labels(stats_df[index_column])
     mean_col = f"mean_{metric_column}"
     p25_col = f"p25_{metric_column}"
     p75_col = f"p75_{metric_column}"
 
     fig, ax = plt.subplots(figsize=(11, 6))
     ax.fill_between(
-        x,
+        x_positions,
         stats_df[p25_col].to_numpy(dtype=float),
         stats_df[p75_col].to_numpy(dtype=float),
         color="#9ecae1",
         alpha=0.45,
         label="P25-P75 band",
     )
-    ax.plot(x, stats_df[mean_col].to_numpy(dtype=float), color="#08519c", linewidth=2.2, label="Mean")
-    ax.plot(x, stats_df[p25_col].to_numpy(dtype=float), color="#3182bd", linestyle="--", linewidth=1.4, label="P25")
-    ax.plot(x, stats_df[p75_col].to_numpy(dtype=float), color="#3182bd", linestyle="--", linewidth=1.4, label="P75")
+    ax.plot(x_positions, stats_df[mean_col].to_numpy(dtype=float), color="#08519c", linewidth=2.2, label="Mean")
+    ax.plot(x_positions, stats_df[p25_col].to_numpy(dtype=float), color="#3182bd", linestyle="--", linewidth=1.4, label="P25")
+    ax.plot(x_positions, stats_df[p75_col].to_numpy(dtype=float), color="#3182bd", linestyle="--", linewidth=1.4, label="P75")
     ax.set_title(f"{title}\n{subtitle}" if subtitle else title)
     ax.set_xlabel(_label_for_index_column(index_column))
     ax.set_ylabel(ylabel)
-    ax.set_xticks(x)
-    ax.set_xlim(x.min(), x.max())
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(x_labels)
+    ax.set_xlim(min(x_positions), max(x_positions))
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()

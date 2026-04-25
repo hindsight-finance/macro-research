@@ -3,8 +3,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from viz.tick_density_viz import process_dataset, summarize_metric_by_index, summarize_tick_density_dataset
+from viz.tick_density_viz import _plot_x_positions_and_labels, process_dataset, summarize_metric_by_index, summarize_tick_density_dataset
 
+
+
+def test_plot_x_positions_and_labels_use_sequential_axis_for_wrapped_macro_minutes():
+    positions, labels = _plot_x_positions_and_labels(pd.Series([40, 41, 59, 0, 10]))
+
+    assert positions == [0, 1, 2, 3, 4]
+    assert labels == ["40", "41", "59", "0", "10"]
 
 def test_summarize_tick_density_dataset_builds_cross_day_band_stats(tmp_path: Path):
     path = tmp_path / "sample.parquet"

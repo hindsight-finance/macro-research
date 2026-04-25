@@ -1,0 +1,6 @@
+dataset,path,index_column,total_days,total_observations,overall_normality,normal_buckets,non_normal_buckets,insufficient_buckets
+nq_macro_tick_density,outputs/nq_macro_tick_density.parquet,macro_minute_index,841,26071,all_non_normal,0,31,0
+nq_macro_tick_density_1550_5s,outputs/nq_macro_tick_density_1550_5s.parquet,bucket_index,841,10092,all_non_normal,0,12,0
+nq_macro_tick_density_1554_5s,outputs/nq_macro_tick_density_1554_5s.parquet,bucket_index,841,10092,all_non_normal,0,12,0
+nq_macro_tick_density_1555_5s,outputs/nq_macro_tick_density_1555_5s.parquet,bucket_index,841,10092,all_non_normal,0,12,0
+nq_macro_tick_density_1559_5s,outputs/nq_macro_tick_density_1559_5s.parquet,bucket_index,841,10092,all_non_normal,0,12,0
