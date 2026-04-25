@@ -22,7 +22,7 @@ OUTPUT_DIR = "outputs"
 
 def build_output_path(input_path: str | Path, output_dir: str | Path) -> Path:
     stem = Path(input_path).stem.replace("_1m", "")
-    return Path(output_dir) / f"{stem}_minute_base.parquet"
+    return Path(output_dir) / f"{stem}_1m.parquet"
 
 
 def process_file(input_path: str, output_dir: str):

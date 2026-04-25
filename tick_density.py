@@ -20,6 +20,8 @@ INPUT_PATH = Path("input-data/merged_nq_ticks.parquet")
 OUTPUT_PATH = Path("outputs/nq_macro_tick_density.parquet")
 OUTPUT_DIR = Path("outputs")
 DEFAULT_5S_MACRO_MINUTES = (50, 54, 55, 59)
+MACRO_1M_START_ET_MINUTE = 15 * 60 + 40
+MACRO_1M_END_ET_MINUTE = 16 * 60 + 10
 UTC_NS = pl.Datetime("ns", time_zone="UTC")
 
 MACRO_TICK_DENSITY_COLUMNS = [
@@ -76,16 +78,16 @@ def _tick_agg() -> list[pl.Expr]:
 
 
 def build_macro_tick_density(path: str | Path) -> pl.LazyFrame:
-    """Return lazy 1-minute macro tick-density aggregates from sanitized ticks."""
-    minute_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ).dt.minute()
-    hour_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ).dt.hour()
+    """Return lazy 1-minute tick-density aggregates for 15:40–16:10 ET."""
+    ts_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ)
+    minute_of_day_et = ts_et.dt.hour().cast(pl.Int32) * 60 + ts_et.dt.minute().cast(pl.Int32)
 
     return (
         _scan_required_tick_columns(path)
-        .filter((hour_et == 15) & (minute_et >= 50) & (minute_et <= 59))
+        .filter((minute_of_day_et >= MACRO_1M_START_ET_MINUTE) & (minute_of_day_et <= MACRO_1M_END_ET_MINUTE))
         .with_columns(
             datetime_utc=pl.col("ts_event").dt.truncate("1m").cast(UTC_NS),
-            macro_minute_index=(minute_et - 50).cast(pl.UInt8),
+            macro_minute_index=ts_et.dt.minute().cast(pl.UInt8),
         )
         .group_by("datetime_utc", "macro_minute_index")
         .agg(*_tick_agg())
