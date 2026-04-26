@@ -3,7 +3,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from volume_delta import build_globex_volume_delta_1m, build_macro_volume_delta_1m
+from volume_delta import build_globex_volume_delta_1m, build_macro_volume_delta_1m, build_macro_volume_delta_5s
 
 
 def _write_ticks(path: Path, rows: dict) -> None:
@@ -129,3 +129,39 @@ def test_build_globex_volume_delta_1m_handles_edt_session_edges(tmp_path: Path):
         "tick_delta",
         "classified_share",
     ]
+
+
+def test_build_macro_volume_delta_5s_emits_120_buckets_with_empty_rows(tmp_path: Path):
+    path = tmp_path / "ticks.parquet"
+    _write_ticks(
+        path,
+        {
+            "ts_event": [
+                "2025-01-02T20:50:00Z",
+                "2025-01-02T20:50:04Z",
+                "2025-01-02T20:50:05Z",
+                "2025-01-02T20:59:59Z",
+            ],
+            "intra_ts_rank": [0, 0, 0, 0],
+            "side": [2, 1, 0, 2],
+            "price_ticks": [84000, 84004, 84008, 84012],
+            "size": [5, 3, 7, 2],
+        },
+    )
+
+    out = build_macro_volume_delta_5s(path).collect(engine="streaming")
+
+    assert out.height == 120
+    assert out.select("macro_bucket_index").to_series().to_list() == list(range(120))
+    first = out.row(0, named=True)
+    assert first["buy_size"] == 5
+    assert first["sell_size"] == 3
+    assert first["volume_delta"] == 2
+    assert first["is_empty"] is False
+    second = out.row(1, named=True)
+    assert second["none_size"] == 7
+    assert second["classified_size"] == 0
+    assert second["delta_imbalance"] is None
+    assert second["classified_share"] == 0.0
+    assert out.row(2, named=True)["is_empty"] is True
+    assert out.row(119, named=True)["buy_size"] == 2

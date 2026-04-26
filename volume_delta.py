@@ -14,6 +14,9 @@ OUTPUT_MACRO_5S_PATH = Path("outputs/nq_macro_volume_delta_5s.parquet")
 ET_TZ = "America/New_York"
 MACRO_START_MINUTE = 50
 MACRO_END_MINUTE = 60
+MACRO_5S_BUCKETS = 120
+SECONDS_PER_MACRO_BUCKET = 5
+UTC_NS = pl.Datetime("ns", time_zone="UTC")
 
 DELTA_COLUMNS = [
     "buy_size",
@@ -103,6 +106,85 @@ def build_macro_volume_delta_1m(path: str | Path) -> pl.LazyFrame:
         .group_by("datetime_utc", "trade_date_et", "macro_minute_index")
         .agg(*_delta_agg())
         .sort("datetime_utc")
+    )
+
+
+def build_macro_volume_delta_5s(path: str | Path) -> pl.LazyFrame:
+    """Return lazy 5-second volume-delta rows for 15:50-16:00 ET with empty buckets."""
+    base = (
+        _scan_required_tick_columns(path)
+        .with_columns(
+            datetime_et=pl.col("ts_event").dt.convert_time_zone(ET_TZ),
+            datetime_utc=pl.col("ts_event").dt.truncate("5s").cast(UTC_NS),
+        )
+        .with_columns(
+            trade_date_et=pl.col("datetime_et").dt.date(),
+            minute=pl.col("datetime_et").dt.minute().cast(pl.Int32),
+            second=pl.col("datetime_et").dt.second().cast(pl.Int32),
+        )
+        .filter(
+            (pl.col("datetime_et").dt.hour() == 15)
+            & (pl.col("minute") >= MACRO_START_MINUTE)
+            & (pl.col("minute") < MACRO_END_MINUTE)
+        )
+        .with_columns(
+            macro_bucket_index=(
+                ((pl.col("minute") - MACRO_START_MINUTE) * 60 + pl.col("second"))
+                // SECONDS_PER_MACRO_BUCKET
+            ).cast(pl.UInt8)
+        )
+    )
+
+    aggregated = base.group_by("datetime_utc", "trade_date_et", "macro_bucket_index").agg(*_delta_agg())
+
+    bucket_grid = (
+        base.select("trade_date_et")
+        .unique()
+        .join(
+            pl.LazyFrame({"macro_bucket_index": pl.Series(range(MACRO_5S_BUCKETS), dtype=pl.UInt8)}),
+            how="cross",
+        )
+        .with_columns(
+            datetime_et=pl.datetime(
+                pl.col("trade_date_et").dt.year(),
+                pl.col("trade_date_et").dt.month(),
+                pl.col("trade_date_et").dt.day(),
+                15,
+                50,
+                0,
+                time_zone=ET_TZ,
+            )
+            + pl.duration(seconds=pl.col("macro_bucket_index").cast(pl.Int64) * SECONDS_PER_MACRO_BUCKET)
+        )
+        .with_columns(datetime_utc=pl.col("datetime_et").dt.convert_time_zone("UTC").cast(UTC_NS))
+        .select("datetime_utc", "trade_date_et", "macro_bucket_index")
+    )
+
+    return (
+        bucket_grid.join(
+            aggregated,
+            on=["datetime_utc", "trade_date_et", "macro_bucket_index"],
+            how="left",
+        )
+        .with_columns(
+            buy_size=pl.col("buy_size").fill_null(0),
+            sell_size=pl.col("sell_size").fill_null(0),
+            none_size=pl.col("none_size").fill_null(0),
+            classified_size=pl.col("classified_size").fill_null(0),
+            total_size=pl.col("total_size").fill_null(0),
+            volume_delta=pl.col("volume_delta").fill_null(0),
+            buy_ticks=pl.col("buy_ticks").fill_null(0),
+            sell_ticks=pl.col("sell_ticks").fill_null(0),
+            none_ticks=pl.col("none_ticks").fill_null(0),
+            tick_delta=pl.col("tick_delta").fill_null(0),
+        )
+        .with_columns(
+            delta_imbalance=_safe_ratio(pl.col("volume_delta"), pl.col("classified_size")),
+            classified_share=_safe_ratio(pl.col("classified_size"), pl.col("total_size")),
+            is_empty=(pl.col("total_size") == 0),
+        )
+        .select(["datetime_utc", "trade_date_et", "macro_bucket_index", *DELTA_COLUMNS, "is_empty"])
+        .sort("trade_date_et", "macro_bucket_index")
     )
 
 
