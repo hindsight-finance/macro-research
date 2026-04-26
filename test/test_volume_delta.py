@@ -36,31 +36,31 @@ def test_build_macro_volume_delta_1m_computes_signed_size_and_diagnostics(tmp_pa
                 "2025-01-02T20:50:00Z",
                 "2025-01-02T20:50:10Z",
                 "2025-01-02T20:50:20Z",
-                "2025-01-02T20:50:30Z",
             ],
-            "intra_ts_rank": [0, 0, 0, 0],
-            "side": [2, 1, 0, 2],
-            "price_ticks": [84000, 84004, 84008, 84012],
-            "size": [5, 3, 7, 2],
+            "intra_ts_rank": [0, 0, 0],
+            "side": [2, 1, 1],
+            "price_ticks": [84000, 84004, 84008],
+            "size": [1, 3, 2],
         },
     )
 
     out = build_macro_volume_delta_1m(path).collect(engine="streaming")
 
     assert out.height == 1
+    assert out.schema["datetime_utc"] == pl.Datetime("ns", time_zone="UTC")
     row = out.row(0, named=True)
-    assert row["buy_size"] == 7
-    assert row["sell_size"] == 3
-    assert row["none_size"] == 7
-    assert row["classified_size"] == 10
-    assert row["total_size"] == 17
-    assert row["volume_delta"] == 4
-    assert row["delta_imbalance"] == pytest.approx(0.4)
-    assert row["buy_ticks"] == 2
-    assert row["sell_ticks"] == 1
-    assert row["none_ticks"] == 1
-    assert row["tick_delta"] == 1
-    assert row["classified_share"] == pytest.approx(10 / 17)
+    assert row["buy_size"] == 1
+    assert row["sell_size"] == 5
+    assert row["none_size"] == 0
+    assert row["classified_size"] == 6
+    assert row["total_size"] == 6
+    assert row["volume_delta"] == -4
+    assert row["delta_imbalance"] == pytest.approx(-4 / 6)
+    assert row["buy_ticks"] == 1
+    assert row["sell_ticks"] == 2
+    assert row["none_ticks"] == 0
+    assert row["tick_delta"] == -1
+    assert row["classified_share"] == pytest.approx(1.0)
 
 
 def test_build_globex_volume_delta_1m_uses_1800_to_1700_et_trade_date(tmp_path: Path):
@@ -84,6 +84,7 @@ def test_build_globex_volume_delta_1m_uses_1800_to_1700_et_trade_date(tmp_path: 
 
     out = build_globex_volume_delta_1m(path).collect(engine="streaming")
 
+    assert out.schema["datetime_utc"] == pl.Datetime("ns", time_zone="UTC")
     assert out.select("trade_date_et").to_series().cast(pl.String).to_list() == [
         "2025-01-03",
         "2025-01-03",

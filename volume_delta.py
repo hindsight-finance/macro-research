@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import polars as pl
 
@@ -51,12 +52,13 @@ def _safe_ratio(numerator: pl.Expr, denominator: pl.Expr) -> pl.Expr:
 
 
 def _delta_agg() -> list[pl.Expr]:
-    buy_size = pl.when(pl.col("side") == 2).then(pl.col("size")).otherwise(0).sum()
-    sell_size = pl.when(pl.col("side") == 1).then(pl.col("size")).otherwise(0).sum()
-    none_size = pl.when(pl.col("side") == 0).then(pl.col("size")).otherwise(0).sum()
-    buy_ticks = (pl.col("side") == 2).sum()
-    sell_ticks = (pl.col("side") == 1).sum()
-    none_ticks = (pl.col("side") == 0).sum()
+    signed_size = pl.col("size").cast(pl.Int64)
+    buy_size = pl.when(pl.col("side") == 2).then(signed_size).otherwise(0).sum()
+    sell_size = pl.when(pl.col("side") == 1).then(signed_size).otherwise(0).sum()
+    none_size = pl.when(pl.col("side") == 0).then(signed_size).otherwise(0).sum()
+    buy_ticks = (pl.col("side") == 2).sum().cast(pl.Int64)
+    sell_ticks = (pl.col("side") == 1).sum().cast(pl.Int64)
+    none_ticks = (pl.col("side") == 0).sum().cast(pl.Int64)
 
     classified_size = buy_size + sell_size
     total_size = classified_size + none_size
@@ -86,7 +88,7 @@ def _with_et_columns(lf: pl.LazyFrame) -> pl.LazyFrame:
             .dt.replace_time_zone("UTC")
             .dt.convert_time_zone(ET_TZ)
         ),
-        datetime_utc=pl.col("ts_event").dt.truncate("1m"),
+        datetime_utc=pl.col("ts_event").dt.truncate("1m").cast(UTC_NS),
     )
 
 
@@ -243,6 +245,10 @@ def write_macro_volume_delta_5s(
     return _sink(build_macro_volume_delta_5s(input_path), output_path)
 
 def main() -> None:
+    if not INPUT_PATH.exists():
+        print(f"[ERROR] Input not found: {INPUT_PATH}", file=sys.stderr)
+        sys.exit(1)
+
     for output in (
         write_globex_volume_delta_1m(),
         write_macro_volume_delta_1m(),
