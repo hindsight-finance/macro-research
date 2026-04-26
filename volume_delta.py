@@ -78,7 +78,11 @@ def _delta_agg() -> list[pl.Expr]:
 
 def _with_et_columns(lf: pl.LazyFrame) -> pl.LazyFrame:
     return lf.with_columns(
-        datetime_et=pl.col("ts_event").dt.convert_time_zone(ET_TZ),
+        datetime_et=(
+            pl.col("ts_event")
+            .dt.replace_time_zone("UTC")
+            .dt.convert_time_zone(ET_TZ)
+        ),
         datetime_utc=pl.col("ts_event").dt.truncate("1m"),
     )
 
@@ -98,5 +102,36 @@ def build_macro_volume_delta_1m(path: str | Path) -> pl.LazyFrame:
         )
         .group_by("datetime_utc", "trade_date_et", "macro_minute_index")
         .agg(*_delta_agg())
+        .sort("datetime_utc")
+    )
+
+
+def build_globex_volume_delta_1m(path: str | Path) -> pl.LazyFrame:
+    """Return lazy 1-minute volume-delta rows for 18:00-17:00 ET Globex sessions."""
+    minute_of_day = (
+        pl.col("datetime_et").dt.hour().cast(pl.Int16) * 60
+        + pl.col("datetime_et").dt.minute().cast(pl.Int16)
+    )
+    session_start_minute = 18 * 60
+    session_end_minute = 17 * 60
+
+    return (
+        _with_et_columns(_scan_required_tick_columns(path))
+        .with_columns(
+            minute_of_day=minute_of_day,
+            trade_date_et=pl.when(minute_of_day >= session_start_minute)
+            .then(pl.col("datetime_et").dt.offset_by("1d").dt.date())
+            .otherwise(pl.col("datetime_et").dt.date()),
+            session_minute_index=pl.when(minute_of_day >= session_start_minute)
+            .then(minute_of_day - session_start_minute)
+            .otherwise(minute_of_day + (24 * 60 - session_start_minute)),
+        )
+        .filter(
+            (pl.col("minute_of_day") >= session_start_minute)
+            | (pl.col("minute_of_day") < session_end_minute)
+        )
+        .group_by("datetime_utc", "trade_date_et", "session_minute_index")
+        .agg(*_delta_agg())
+        .select(["datetime_utc", "trade_date_et", "session_minute_index", *DELTA_COLUMNS])
         .sort("datetime_utc")
     )
