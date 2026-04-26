@@ -217,3 +217,39 @@ def build_globex_volume_delta_1m(path: str | Path) -> pl.LazyFrame:
         .select(["datetime_utc", "trade_date_et", "session_minute_index", *DELTA_COLUMNS])
         .sort("datetime_utc")
     )
+
+def _sink(lf: pl.LazyFrame, output_path: str | Path) -> Path:
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lf.sink_parquet(output)
+    return output
+
+def write_globex_volume_delta_1m(
+    input_path: str | Path = INPUT_PATH,
+    output_path: str | Path = OUTPUT_GLOBEX_1M_PATH,
+) -> Path:
+    return _sink(build_globex_volume_delta_1m(input_path), output_path)
+
+def write_macro_volume_delta_1m(
+    input_path: str | Path = INPUT_PATH,
+    output_path: str | Path = OUTPUT_MACRO_1M_PATH,
+) -> Path:
+    return _sink(build_macro_volume_delta_1m(input_path), output_path)
+
+def write_macro_volume_delta_5s(
+    input_path: str | Path = INPUT_PATH,
+    output_path: str | Path = OUTPUT_MACRO_5S_PATH,
+) -> Path:
+    return _sink(build_macro_volume_delta_5s(input_path), output_path)
+
+def main() -> None:
+    for output in (
+        write_globex_volume_delta_1m(),
+        write_macro_volume_delta_1m(),
+        write_macro_volume_delta_5s(),
+    ):
+        print(f"[OK] Wrote volume delta → {output}")
+
+
+if __name__ == "__main__":
+    main()

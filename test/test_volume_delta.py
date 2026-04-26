@@ -3,7 +3,14 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from volume_delta import build_globex_volume_delta_1m, build_macro_volume_delta_1m, build_macro_volume_delta_5s
+from volume_delta import (
+    build_globex_volume_delta_1m,
+    build_macro_volume_delta_1m,
+    build_macro_volume_delta_5s,
+    write_globex_volume_delta_1m,
+    write_macro_volume_delta_1m,
+    write_macro_volume_delta_5s,
+)
 
 
 def _write_ticks(path: Path, rows: dict) -> None:
@@ -165,3 +172,28 @@ def test_build_macro_volume_delta_5s_emits_120_buckets_with_empty_rows(tmp_path:
     assert second["classified_share"] == 0.0
     assert out.row(2, named=True)["is_empty"] is True
     assert out.row(119, named=True)["buy_size"] == 2
+
+
+def test_write_volume_delta_outputs_return_paths_and_persist_expected_rows(tmp_path: Path):
+    input_path = tmp_path / "ticks.parquet"
+    _write_ticks(
+        input_path,
+        {
+            "ts_event": ["2025-01-02T20:50:00Z"],
+            "intra_ts_rank": [0],
+            "side": [2],
+            "price_ticks": [84000],
+            "size": [5],
+        },
+    )
+    globex_path = tmp_path / "nested" / "globex.parquet"
+    macro_1m_path = tmp_path / "nested" / "macro_1m.parquet"
+    macro_5s_path = tmp_path / "nested" / "macro_5s.parquet"
+
+    assert write_globex_volume_delta_1m(input_path, globex_path) == globex_path
+    assert write_macro_volume_delta_1m(input_path, macro_1m_path) == macro_1m_path
+    assert write_macro_volume_delta_5s(input_path, macro_5s_path) == macro_5s_path
+
+    assert pl.read_parquet(globex_path).height == 1
+    assert pl.read_parquet(macro_1m_path).height == 1
+    assert pl.read_parquet(macro_5s_path).height == 120
