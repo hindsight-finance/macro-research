@@ -89,3 +89,18 @@ def test_process_dataset_writes_csvs_and_pngs(tmp_path: Path):
     assert (out_dir / "nq_macro_extreme_timing_heatmap.png").exists()
     assert (out_dir / "nq_macro_extreme_timing_histograms.png").exists()
     assert pl.read_csv(out_dir / "nq_macro_extreme_timing_quantiles.csv").height == summary.quantiles.height
+
+
+def test_process_dataset_writes_variance_focused_plots_and_directional_stats(tmp_path: Path):
+    path = tmp_path / "nq_macro_extreme_timing.parquet"
+    out_dir = tmp_path / "figs"
+    _timing_frame().write_parquet(path)
+
+    process_dataset(path, out_dir)
+
+    assert (out_dir / "nq_macro_extreme_timing_ecdf.png").exists()
+    assert (out_dir / "nq_macro_extreme_timing_violin.png").exists()
+    assert (out_dir / "nq_macro_extreme_timing_high_low_scatter.png").exists()
+    assert (out_dir / "nq_macro_extreme_timing_extreme_gap_distribution.png").exists()
+    stats = pl.read_csv(out_dir / "nq_macro_extreme_timing_directional_extreme_stats.csv")
+    assert {"macro_trend_state", "macro_minute_index", "directional_extreme", "late_extreme_pct"}.issubset(set(stats.columns))
