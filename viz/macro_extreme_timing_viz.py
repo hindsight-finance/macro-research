@@ -298,18 +298,116 @@ def _plot_gap_distribution(df: pl.DataFrame, dataset_name: str, out_path: Path) 
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
+def _plot_simple_quantile_bands(quantiles: pl.DataFrame, dataset_name: str, out_path: Path) -> None:
+    work = quantiles.filter(pl.col("macro_trend_state").is_in(["bullish", "bearish"])).sort(
+        "macro_trend_state", "macro_minute_index", "extreme"
+    )
+    if work.is_empty():
+        return
+    labels = []
+    y = []
+    p10 = []
+    p25 = []
+    med = []
+    p75 = []
+    p90 = []
+    colors = []
+    for i, row in enumerate(work.iter_rows(named=True)):
+        labels.append(f"{row['macro_trend_state'][:4]} 15:{int(row['macro_minute_index']):02d} {row['extreme'][0].upper()}")
+        y.append(i)
+        p10.append(row["p10_time"])
+        p25.append(row["p25_time"])
+        med.append(row["median_time"])
+        p75.append(row["p75_time"])
+        p90.append(row["p90_time"])
+        colors.append("#08519c" if row["extreme"] == "high" else "#cb181d")
+
+    fig, ax = plt.subplots(figsize=(11, max(5, 0.34 * len(labels))))
+    for i, color in enumerate(colors):
+        ax.hlines(y[i], p10[i], p90[i], color=color, alpha=0.30, linewidth=7, label="p10-p90" if i == 0 else None)
+        ax.hlines(y[i], p25[i], p75[i], color=color, alpha=0.75, linewidth=7, label="p25-p75" if i == 0 else None)
+        ax.plot(med[i], y[i], marker="o", color="black", markersize=4, label="median" if i == 0 else None)
+    ax.set_title(f"{dataset_name}: simple timing bands (wider bar = more variance)")
+    ax.set_xlabel("Second in minute")
+    ax.set_xlim(0, 59)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.grid(True, axis="x", alpha=0.25)
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_sequence_rates(df: pl.DataFrame, dataset_name: str, out_path: Path) -> None:
+    rates = (
+        df.filter(pl.col("macro_trend_state").is_in(["bullish", "bearish"]))
+        .group_by("macro_trend_state", "macro_minute_index")
+        .agg(
+            (pl.col("candle_high_time") < pl.col("candle_low_time")).mean().mul(100).alias("high_first_pct"),
+            (pl.col("candle_low_time") < pl.col("candle_high_time")).mean().mul(100).alias("low_first_pct"),
+            (pl.col("candle_low_time") == pl.col("candle_high_time")).mean().mul(100).alias("same_second_pct"),
+        )
+        .sort("macro_trend_state", "macro_minute_index")
+    )
+    if rates.is_empty():
+        return
+    labels = [f"{r['macro_trend_state'][:4]} 15:{int(r['macro_minute_index']):02d}" for r in rates.iter_rows(named=True)]
+    high = rates.select("high_first_pct").to_series().to_numpy()
+    low = rates.select("low_first_pct").to_series().to_numpy()
+    same = rates.select("same_second_pct").to_series().to_numpy()
+    x = np.arange(len(labels))
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    ax.bar(x, high, label="High first", color="#08519c", alpha=0.78)
+    ax.bar(x, low, bottom=high, label="Low first", color="#cb181d", alpha=0.70)
+    ax.bar(x, same, bottom=high + low, label="Same second", color="#969696", alpha=0.70)
+    ax.set_title(f"{dataset_name}: which extreme forms first?")
+    ax.set_ylabel("Share of candles (%)")
+    ax.set_ylim(0, 100)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_late_directional_extreme_rates(stats: pl.DataFrame, dataset_name: str, out_path: Path) -> None:
+    if stats.is_empty():
+        return
+    labels = [f"{r['macro_trend_state'][:4]} 15:{int(r['macro_minute_index']):02d} {r['directional_extreme'][0].upper()}" for r in stats.iter_rows(named=True)]
+    values = stats.select("late_extreme_pct").to_series().to_numpy()
+    colors = ["#08519c" if r["directional_extreme"] == "high" else "#cb181d" for r in stats.iter_rows(named=True)]
+    x = np.arange(len(labels))
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(x, values, color=colors, alpha=0.75)
+    ax.set_title(f"{dataset_name}: directional extreme after second 45")
+    ax.set_ylabel("Late directional extreme rate (%)")
+    ax.set_ylim(0, 100)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
 def _write_summary_files(summary: MacroExtremeTimingVizSummary, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     summary.frequency.write_csv(out_dir / f"{summary.dataset_name}_frequency.csv")
     summary.quantiles.write_csv(out_dir / f"{summary.dataset_name}_quantiles.csv")
     raw = pl.read_parquet(summary.path)
-    _directional_extreme_stats(raw).write_csv(out_dir / f"{summary.dataset_name}_directional_extreme_stats.csv")
+    directional_stats = _directional_extreme_stats(raw)
+    directional_stats.write_csv(out_dir / f"{summary.dataset_name}_directional_extreme_stats.csv")
     _plot_histograms(raw, summary.dataset_name, out_dir / f"{summary.dataset_name}_histograms.png")
     _plot_heatmap(summary.frequency, summary.dataset_name, out_dir / f"{summary.dataset_name}_heatmap.png")
     _plot_ecdf(raw, summary.dataset_name, out_dir / f"{summary.dataset_name}_ecdf.png")
     _plot_violin(raw, summary.dataset_name, out_dir / f"{summary.dataset_name}_violin.png")
     _plot_high_low_scatter(raw, summary.dataset_name, out_dir / f"{summary.dataset_name}_high_low_scatter.png")
     _plot_gap_distribution(raw, summary.dataset_name, out_dir / f"{summary.dataset_name}_extreme_gap_distribution.png")
+    _plot_simple_quantile_bands(summary.quantiles, summary.dataset_name, out_dir / f"{summary.dataset_name}_simple_quantile_bands.png")
+    _plot_sequence_rates(raw, summary.dataset_name, out_dir / f"{summary.dataset_name}_sequence_rates.png")
+    _plot_late_directional_extreme_rates(directional_stats, summary.dataset_name, out_dir / f"{summary.dataset_name}_late_directional_extreme_rates.png")
 
 
 def process_dataset(path: str | Path, out_dir: str | Path = OUT_DIR) -> MacroExtremeTimingVizSummary:

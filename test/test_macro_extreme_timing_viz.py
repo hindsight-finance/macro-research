@@ -104,3 +104,15 @@ def test_process_dataset_writes_variance_focused_plots_and_directional_stats(tmp
     assert (out_dir / "nq_macro_extreme_timing_extreme_gap_distribution.png").exists()
     stats = pl.read_csv(out_dir / "nq_macro_extreme_timing_directional_extreme_stats.csv")
     assert {"macro_trend_state", "macro_minute_index", "directional_extreme", "late_extreme_pct"}.issubset(set(stats.columns))
+
+
+def test_process_dataset_writes_simple_interpretation_plots(tmp_path: Path):
+    path = tmp_path / "nq_macro_extreme_timing.parquet"
+    out_dir = tmp_path / "figs"
+    _timing_frame().write_parquet(path)
+
+    process_dataset(path, out_dir)
+
+    assert (out_dir / "nq_macro_extreme_timing_simple_quantile_bands.png").exists()
+    assert (out_dir / "nq_macro_extreme_timing_sequence_rates.png").exists()
+    assert (out_dir / "nq_macro_extreme_timing_late_directional_extreme_rates.png").exists()
