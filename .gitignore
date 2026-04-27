@@ -12,6 +12,7 @@ htmlcov/
 
 # Virtual environments and local Python config
 .venv/
+.venv-codex/
 venv/
 env/
 .python-version
