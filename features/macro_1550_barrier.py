@@ -19,20 +19,35 @@ MACRO_1550_BARRIER_COLUMNS = [
     "macro_open",
     "macro_close",
     "macro_dir_points",
+    "barrier_extreme",
+    "barrier_price",
+    "barrier_time",
+    "barrier_first10",
+    "opposite_1550_price",
+    "opposite_1550_time",
     "low_1550",
     "low_1550_time",
     "low_1550_first10",
     "high_1550",
     "high_1550_time",
+    "high_1550_first10",
     "open_1550",
     "close_1550",
     "dir_1550_points",
     "range_1550_points",
+    "macro_extreme",
+    "macro_extreme_minute_index",
+    "macro_extreme_time",
+    "barrier_is_macro_extreme",
+    "barrier_holds",
+    "edge_case",
+    "macro_extreme_after_1550_points",
+    "macro_extreme_after_1550_minutes",
+    # Back-compat bullish low names.
     "macro_low",
     "macro_low_minute_index",
     "macro_low_time",
     "low_1550_is_macro_low",
-    "barrier_holds",
     "bullish_edge_case",
     "macro_low_after_1550_points",
     "macro_low_after_1550_minutes",
@@ -40,11 +55,18 @@ MACRO_1550_BARRIER_COLUMNS = [
 
 MACRO_1550_BARRIER_SUMMARY_COLUMNS = [
     "scope",
+    "macro_trend_state",
+    "barrier_extreme",
     "sample_size",
-    "low_1550_first10_pct",
-    "low_1550_is_macro_low_pct",
+    "barrier_first10_pct",
+    "barrier_is_macro_extreme_pct",
     "barrier_holds_pct",
     "edge_case_pct",
+    "avg_macro_extreme_after_1550_points",
+    "median_macro_extreme_after_1550_points",
+    # Back-compat bullish low names.
+    "low_1550_first10_pct",
+    "low_1550_is_macro_low_pct",
     "avg_macro_low_after_1550_points",
     "median_macro_low_after_1550_points",
 ]
@@ -71,23 +93,29 @@ def _require_columns(df: pl.DataFrame) -> None:
 
 
 def build_macro_1550_barrier_study(df: pl.DataFrame, barrier_seconds: int = DEFAULT_BARRIER_SECONDS) -> pl.DataFrame:
-    """Return one bullish-macro row per date with 15:50 low-barrier diagnostics."""
+    """Return one row per bullish/bearish macro date with 15:50 directional barrier diagnostics."""
     if barrier_seconds <= 0 or barrier_seconds > 60:
         raise ValueError(f"barrier_seconds must be 1..60, got {barrier_seconds}")
     _require_columns(df)
 
-    bullish = df.filter(pl.col("macro_trend_state") == "bullish")
-    if bullish.is_empty():
+    directional = df.filter(pl.col("macro_trend_state").is_in(["bullish", "bearish"]))
+    if directional.is_empty():
         return pl.DataFrame(schema={col: pl.Null for col in MACRO_1550_BARRIER_COLUMNS})
 
-    lows = bullish.sort("date", "candle_low", "macro_minute_index", "candle_low_time").group_by("date", maintain_order=True).first().select(
+    lows = directional.sort("date", "candle_low", "macro_minute_index", "candle_low_time").group_by("date", maintain_order=True).first().select(
         "date",
         pl.col("candle_low").alias("macro_low"),
         pl.col("macro_minute_index").alias("macro_low_minute_index"),
         pl.col("candle_low_time").alias("macro_low_time"),
     )
+    highs = directional.sort(["date", "candle_high", "macro_minute_index", "candle_high_time"], descending=[False, True, False, False]).group_by("date", maintain_order=True).first().select(
+        "date",
+        pl.col("candle_high").alias("macro_high"),
+        pl.col("macro_minute_index").alias("macro_high_minute_index"),
+        pl.col("candle_high_time").alias("macro_high_time"),
+    )
 
-    base_1550 = bullish.filter(pl.col("macro_minute_index") == 50).select(
+    base_1550 = directional.filter(pl.col("macro_minute_index") == 50).select(
         "date",
         "macro_trend_state",
         "macro_open",
@@ -103,62 +131,99 @@ def build_macro_1550_barrier_study(df: pl.DataFrame, barrier_seconds: int = DEFA
 
     return (
         base_1550.join(lows, on="date", how="inner")
+        .join(highs, on="date", how="inner")
         .with_columns(
             dir_1550_points=pl.col("close_1550") - pl.col("open_1550"),
             range_1550_points=pl.col("high_1550") - pl.col("low_1550"),
             low_1550_first10=pl.col("low_1550_time") < barrier_seconds,
+            high_1550_first10=pl.col("high_1550_time") < barrier_seconds,
+            barrier_extreme=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.lit("low")).otherwise(pl.lit("high")),
+        )
+        .with_columns(
+            barrier_price=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("low_1550")).otherwise(pl.col("high_1550")),
+            barrier_time=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("low_1550_time")).otherwise(pl.col("high_1550_time")),
+            barrier_first10=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("low_1550_first10")).otherwise(pl.col("high_1550_first10")),
+            opposite_1550_price=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("high_1550")).otherwise(pl.col("low_1550")),
+            opposite_1550_time=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("high_1550_time")).otherwise(pl.col("low_1550_time")),
+            macro_extreme=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("macro_low")).otherwise(pl.col("macro_high")),
+            macro_extreme_minute_index=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("macro_low_minute_index")).otherwise(pl.col("macro_high_minute_index")),
+            macro_extreme_time=pl.when(pl.col("macro_trend_state") == "bullish").then(pl.col("macro_low_time")).otherwise(pl.col("macro_high_time")),
             low_1550_is_macro_low=pl.col("low_1550") == pl.col("macro_low"),
         )
         .with_columns(
-            barrier_holds=pl.col("low_1550_first10") & pl.col("low_1550_is_macro_low"),
-            bullish_edge_case=~pl.col("low_1550_is_macro_low"),
+            barrier_is_macro_extreme=pl.when(pl.col("macro_trend_state") == "bullish")
+            .then(pl.col("low_1550") == pl.col("macro_low"))
+            .otherwise(pl.col("high_1550") == pl.col("macro_high")),
+        )
+        .with_columns(
+            barrier_holds=pl.col("barrier_first10") & pl.col("barrier_is_macro_extreme"),
+            edge_case=~pl.col("barrier_is_macro_extreme"),
+            bullish_edge_case=pl.when(pl.col("macro_trend_state") == "bullish").then(~pl.col("low_1550_is_macro_low")).otherwise(False),
             macro_low_after_1550_points=(pl.col("low_1550") - pl.col("macro_low")).clip(0.0),
-            macro_low_after_1550_minutes=pl.when(pl.col("low_1550") == pl.col("macro_low"))
+            macro_extreme_after_1550_points=pl.when(pl.col("macro_trend_state") == "bullish")
+            .then((pl.col("low_1550") - pl.col("macro_low")).clip(0.0))
+            .otherwise((pl.col("macro_high") - pl.col("high_1550")).clip(0.0)),
+            macro_low_after_1550_minutes=pl.when(pl.col("low_1550") == pl.col("macro_low")).then(None).otherwise(pl.col("macro_low_minute_index") - 50),
+            macro_extreme_after_1550_minutes=pl.when(pl.col("barrier_is_macro_extreme"))
             .then(None)
-            .otherwise(pl.col("macro_low_minute_index") - 50),
+            .otherwise(pl.col("macro_extreme_minute_index") - 50),
         )
         .select(MACRO_1550_BARRIER_COLUMNS)
         .sort("date")
     )
 
-
 def _summary_row(df: pl.DataFrame, scope: str) -> dict:
     if df.is_empty():
         return {
             "scope": scope,
+            "macro_trend_state": None,
+            "barrier_extreme": None,
             "sample_size": 0,
-            "low_1550_first10_pct": None,
-            "low_1550_is_macro_low_pct": None,
+            "barrier_first10_pct": None,
+            "barrier_is_macro_extreme_pct": None,
             "barrier_holds_pct": None,
             "edge_case_pct": None,
+            "avg_macro_extreme_after_1550_points": None,
+            "median_macro_extreme_after_1550_points": None,
+            "low_1550_first10_pct": None,
+            "low_1550_is_macro_low_pct": None,
             "avg_macro_low_after_1550_points": None,
             "median_macro_low_after_1550_points": None,
         }
     metrics = df.select(
+        pl.col("macro_trend_state").first().alias("macro_trend_state"),
+        pl.col("barrier_extreme").first().alias("barrier_extreme"),
         pl.len().alias("sample_size"),
+        (pl.col("barrier_first10").mean() * 100.0).alias("barrier_first10_pct"),
+        (pl.col("barrier_is_macro_extreme").mean() * 100.0).alias("barrier_is_macro_extreme_pct"),
+        (pl.col("barrier_holds").mean() * 100.0).alias("barrier_holds_pct"),
+        (pl.col("edge_case").mean() * 100.0).alias("edge_case_pct"),
+        pl.col("macro_extreme_after_1550_points").filter(pl.col("edge_case")).mean().alias("avg_macro_extreme_after_1550_points"),
+        pl.col("macro_extreme_after_1550_points").filter(pl.col("edge_case")).median().alias("median_macro_extreme_after_1550_points"),
         (pl.col("low_1550_first10").mean() * 100.0).alias("low_1550_first10_pct"),
         (pl.col("low_1550_is_macro_low").mean() * 100.0).alias("low_1550_is_macro_low_pct"),
-        (pl.col("barrier_holds").mean() * 100.0).alias("barrier_holds_pct"),
-        (pl.col("bullish_edge_case").mean() * 100.0).alias("edge_case_pct"),
         pl.col("macro_low_after_1550_points").filter(pl.col("bullish_edge_case")).mean().alias("avg_macro_low_after_1550_points"),
         pl.col("macro_low_after_1550_points").filter(pl.col("bullish_edge_case")).median().alias("median_macro_low_after_1550_points"),
     ).row(0, named=True)
     return {"scope": scope, **metrics}
 
-
 def summarize_macro_1550_barrier_study(df: pl.DataFrame) -> pl.DataFrame:
-    """Summarize 15:50 low-barrier hold/fail rates for bullish macros."""
+    """Summarize 15:50 directional barrier hold/fail rates for bullish and bearish macros."""
     missing = sorted(set(MACRO_1550_BARRIER_COLUMNS) - set(df.columns))
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    rows = [
-        _summary_row(df, "bullish_macro"),
-        _summary_row(df.filter(pl.col("low_1550_first10")), "bullish_macro_low_1550_first10"),
-        _summary_row(df.filter(~pl.col("low_1550_first10")), "bullish_macro_low_1550_after10"),
-    ]
+    rows = []
+    for trend in ["bullish", "bearish"]:
+        trend_df = df.filter(pl.col("macro_trend_state") == trend)
+        rows.extend(
+            [
+                _summary_row(trend_df, f"{trend}_macro"),
+                _summary_row(trend_df.filter(pl.col("barrier_first10")), f"{trend}_macro_barrier_first10"),
+                _summary_row(trend_df.filter(~pl.col("barrier_first10")), f"{trend}_macro_barrier_after10"),
+            ]
+        )
     return pl.DataFrame(rows).select(MACRO_1550_BARRIER_SUMMARY_COLUMNS)
-
 
 def write_macro_1550_barrier_study(
     input_path: str | Path = INPUT_PATH,

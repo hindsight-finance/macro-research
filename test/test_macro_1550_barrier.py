@@ -118,3 +118,87 @@ def test_write_macro_1550_barrier_study_writes_outputs(tmp_path: Path):
     assert wrote == (output_path, summary_path)
     assert pl.read_parquet(output_path).columns == MACRO_1550_BARRIER_COLUMNS
     assert pl.read_parquet(summary_path).columns == MACRO_1550_BARRIER_SUMMARY_COLUMNS
+
+
+def _bearish_timing_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "date": ["2025-01-06"] * 4 + ["2025-01-07"] * 4,
+            "datetime_utc": [
+                "2025-01-06T20:50:00Z",
+                "2025-01-06T20:54:00Z",
+                "2025-01-06T20:55:00Z",
+                "2025-01-06T20:59:00Z",
+                "2025-01-07T20:50:00Z",
+                "2025-01-07T20:54:00Z",
+                "2025-01-07T20:55:00Z",
+                "2025-01-07T20:59:00Z",
+            ],
+            "macro_minute_index": [50, 54, 55, 59, 50, 54, 55, 59],
+            "candle_open": [100, 96, 95, 94, 100, 97, 98, 96],
+            "candle_high": [101, 96, 95, 94, 101, 102, 103, 99],
+            "candle_low": [95, 94, 93, 90, 96, 95, 94, 90],
+            "candle_close": [96, 95, 94, 91, 97, 98, 96, 92],
+            "candle_volume": [10] * 8,
+            "candle_dir_points": [-4, -1, -1, -3, -3, 1, -2, -4],
+            "candle_dir_sign": [-1, -1, -1, -1, -1, 1, -1, -1],
+            "candle_trend_state": ["bearish", "bearish", "bearish", "bearish", "bearish", "bullish", "bearish", "bearish"],
+            "candle_high_time": [5, 20, 30, 40, 5, 30, 40, 10],
+            "candle_low_time": [40, 50, 50, 58, 35, 10, 45, 59],
+            "candle_high_ts_utc": [
+                "2025-01-06T20:50:05Z",
+                "2025-01-06T20:54:20Z",
+                "2025-01-06T20:55:30Z",
+                "2025-01-06T20:59:40Z",
+                "2025-01-07T20:50:05Z",
+                "2025-01-07T20:54:30Z",
+                "2025-01-07T20:55:40Z",
+                "2025-01-07T20:59:10Z",
+            ],
+            "candle_low_ts_utc": [
+                "2025-01-06T20:50:40Z",
+                "2025-01-06T20:54:50Z",
+                "2025-01-06T20:55:50Z",
+                "2025-01-06T20:59:58Z",
+                "2025-01-07T20:50:35Z",
+                "2025-01-07T20:54:10Z",
+                "2025-01-07T20:55:45Z",
+                "2025-01-07T20:59:59Z",
+            ],
+            "candle_high_first": [True, True, True, True, True, False, True, True],
+            "candle_extreme_gap_seconds": [35, 30, 20, 18, 30, 20, 5, 49],
+            "macro_open": [100] * 8,
+            "macro_close": [91] * 4 + [92] * 4,
+            "macro_dir_points": [-9] * 4 + [-8] * 4,
+            "macro_dir_sign": [-1] * 8,
+            "macro_trend_state": ["bearish"] * 8,
+        }
+    ).with_columns(
+        pl.col("date").str.to_date(),
+        pl.col("datetime_utc").str.to_datetime(time_zone="UTC"),
+        pl.col("candle_high_ts_utc").str.to_datetime(time_zone="UTC"),
+        pl.col("candle_low_ts_utc").str.to_datetime(time_zone="UTC"),
+    )
+
+
+def test_build_macro_1550_barrier_study_supports_bearish_high_barrier():
+    out = build_macro_1550_barrier_study(_bearish_timing_frame(), barrier_seconds=10)
+
+    assert out.height == 2
+    held = out.filter(pl.col("date") == pl.date(2025, 1, 6)).row(0, named=True)
+    assert held["macro_trend_state"] == "bearish"
+    assert held["barrier_extreme"] == "high"
+    assert held["barrier_first10"] is True
+    assert held["barrier_is_macro_extreme"] is True
+    assert held["barrier_holds"] is True
+    assert held["edge_case"] is False
+    assert held["macro_extreme_minute_index"] == 50
+
+    failed = out.filter(pl.col("date") == pl.date(2025, 1, 7)).row(0, named=True)
+    assert failed["barrier_extreme"] == "high"
+    assert failed["barrier_first10"] is True
+    assert failed["barrier_is_macro_extreme"] is False
+    assert failed["barrier_holds"] is False
+    assert failed["edge_case"] is True
+    assert failed["macro_extreme_minute_index"] == 55
+    assert failed["macro_extreme_after_1550_points"] == 2.0

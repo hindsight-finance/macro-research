@@ -92,3 +92,20 @@ def test_summarize_barrier_dataset_exposes_edge_cases(tmp_path: Path):
 
     assert summary.edge_cases.height == 1
     assert summary.edge_cases.item(0, "macro_low_minute_index") == 55
+
+
+def test_process_dataset_handles_bullish_and_bearish_barrier_scopes(tmp_path: Path):
+    from test_macro_1550_barrier import _bearish_timing_frame
+
+    timing = pl.concat([_timing_frame(), _bearish_timing_frame()], how="vertical")
+    study = build_macro_1550_barrier_study(timing)
+    path = tmp_path / "nq_macro_1550_barrier.parquet"
+    out_dir = tmp_path / "figs"
+    study.write_parquet(path)
+
+    summary = process_dataset(path, out_dir)
+
+    scopes = set(summary.summary.select("scope").to_series().to_list())
+    assert "bullish_macro" in scopes
+    assert "bearish_macro" in scopes
+    assert set(summary.edge_cases.select("macro_trend_state").to_series().unique().to_list()) == {"bullish", "bearish"}

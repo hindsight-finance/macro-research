@@ -34,7 +34,7 @@ class BarrierVizSummary:
 def summarize_barrier_dataset(path: str | Path) -> BarrierVizSummary:
     dataset_path = Path(path)
     df = pl.read_parquet(dataset_path)
-    required = {"date", "bullish_edge_case", "macro_low_minute_index", "macro_low_after_1550_points"}
+    required = {"date", "edge_case", "macro_extreme_minute_index", "macro_extreme_after_1550_points"}
     missing = sorted(required - set(df.columns))
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
@@ -42,7 +42,7 @@ def summarize_barrier_dataset(path: str | Path) -> BarrierVizSummary:
         path=dataset_path,
         dataset_name=dataset_path.stem,
         summary=summarize_macro_1550_barrier_study(df),
-        edge_cases=df.filter(pl.col("bullish_edge_case")).sort("date"),
+        edge_cases=df.filter(pl.col("edge_case")).sort("date"),
         total_days=df.height,
     )
 
@@ -50,21 +50,20 @@ def summarize_barrier_dataset(path: str | Path) -> BarrierVizSummary:
 def _plot_rates(summary: pl.DataFrame, dataset_name: str, out_path: Path) -> None:
     if summary.is_empty():
         return
-    overall = summary.filter(pl.col("scope") == "bullish_macro")
+    overall = summary.filter(pl.col("scope").is_in(["bullish_macro", "bearish_macro"]))
     if overall.is_empty():
         return
-    row = overall.row(0, named=True)
-    labels = ["15:50 low\nfirst 10s", "15:50 low\nmacro low", "barrier\nholds", "edge\ncase"]
-    values = [
-        row["low_1550_first10_pct"],
-        row["low_1550_is_macro_low_pct"],
-        row["barrier_holds_pct"],
-        row["edge_case_pct"],
-    ]
-    colors = ["#6baed6", "#3182bd", "#31a354", "#de2d26"]
-    fig, ax = plt.subplots(figsize=(8, 5))
+    labels = []
+    values = []
+    colors = []
+    for row in overall.iter_rows(named=True):
+        prefix = "bull low" if row["macro_trend_state"] == "bullish" else "bear high"
+        labels.extend([f"{prefix}\nfirst 10s", f"{prefix}\nmacro extreme", f"{prefix}\nholds", f"{prefix}\nedge"])
+        values.extend([0.0 if row["barrier_first10_pct"] is None else row["barrier_first10_pct"], 0.0 if row["barrier_is_macro_extreme_pct"] is None else row["barrier_is_macro_extreme_pct"], 0.0 if row["barrier_holds_pct"] is None else row["barrier_holds_pct"], 0.0 if row["edge_case_pct"] is None else row["edge_case_pct"]])
+        colors.extend(["#6baed6", "#3182bd", "#31a354", "#de2d26"])
+    fig, ax = plt.subplots(figsize=(12, 5))
     bars = ax.bar(labels, values, color=colors, alpha=0.78)
-    ax.set_title(f"{dataset_name}: bullish 15:50 low barrier")
+    ax.set_title(f"{dataset_name}: 15:50 directional barrier")
     ax.set_ylabel("Rate (%)")
     ax.set_ylim(0, 100)
     ax.grid(True, axis="y", alpha=0.25)
@@ -84,11 +83,11 @@ def _plot_edge_depth(edge_cases: pl.DataFrame, dataset_name: str, out_path: Path
         fig.savefig(out_path, dpi=150)
         plt.close(fig)
         return
-    values = edge_cases.select("macro_low_after_1550_points").to_series().to_numpy()
+    values = edge_cases.select("macro_extreme_after_1550_points").to_series().to_numpy()
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.hist(values, bins=min(30, max(5, len(values) // 4)), color="#de2d26", alpha=0.72)
-    ax.set_title(f"{dataset_name}: edge-case depth below 15:50 low")
-    ax.set_xlabel("Points below 15:50 low")
+    ax.set_title(f"{dataset_name}: edge-case depth past 15:50 barrier")
+    ax.set_xlabel("Points beyond 15:50 barrier")
     ax.set_ylabel("Count")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
