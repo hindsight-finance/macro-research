@@ -22,6 +22,6 @@ def test_process_file_writes_minute_base_with_datetime_utc(tmp_path: Path):
     out_path = process_file(str(input_path), str(output_dir))
     out = pl.read_parquet(out_path)
 
-    assert out_path.name == "nq_minute_base.parquet"
+    assert out_path.name == "nq_1m.parquet"
     assert out.columns == ["datetime_utc", "Open", "High", "Low", "Close", "Volume"]
     assert out.schema["datetime_utc"].time_zone == "UTC"
