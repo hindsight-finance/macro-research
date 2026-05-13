@@ -224,3 +224,49 @@ def test_summarize_macro_1550_delta_impulse_adds_target_sign_rows():
     assert row["target_p25_when_predictor_positive"] == pytest.approx(-10)
     assert row["target_p75_when_predictor_positive"] == pytest.approx(-10)
     assert row["pearson_corr_predictor_vs_target_delta"] is not None
+
+
+def test_summarize_macro_1550_delta_impulse_adds_decile_and_tail_rows():
+    globex_rows = []
+    macro_rows = []
+    for i in range(20):
+        day = f"2025-01-{i + 1:02d}"
+        predictor_delta = i + 1 if i >= 10 else -(20 - i)
+        target_delta = -predictor_delta
+        globex_rows.append(_g(day, 930, predictor_delta, abs(predictor_delta) * 2, abs(predictor_delta) * 2))
+        macro_rows.append(_s(day, 0, target_delta, abs(target_delta) * 2, abs(target_delta) * 2))
+        macro_rows.append(_s(day, 1, 0, 1, 1))
+    study = build_macro_1550_delta_impulse(_globex_rows(globex_rows), _macro_5s_rows(macro_rows))
+
+    summary = summarize_macro_1550_delta_impulse(study)
+
+    raw_deciles = summary.filter(
+        (pl.col("summary_type") == "target_raw_decile")
+        & (pl.col("predictor") == "rth_only_pre350")
+        & (pl.col("target_window") == "k350_00_09")
+    )
+    imbalance_deciles = summary.filter(
+        (pl.col("summary_type") == "target_imbalance_decile")
+        & (pl.col("predictor") == "rth_only_pre350")
+        & (pl.col("target_window") == "k350_00_09")
+    )
+    tails = summary.filter(
+        (pl.col("summary_type") == "target_tail")
+        & (pl.col("predictor") == "rth_only_pre350")
+        & (pl.col("target_window") == "k350_00_09")
+    )
+
+    assert raw_deciles.height == 10
+    assert imbalance_deciles.height == 10
+    assert set(tails["tail"].to_list()) == {
+        "positive_top_20",
+        "positive_top_10",
+        "negative_bottom_20",
+        "negative_bottom_10",
+    }
+    top_tail = tails.filter(pl.col("tail") == "positive_top_20").row(0, named=True)
+    assert top_tail["n_days"] >= 1
+    assert top_tail["opposite_rate"] == pytest.approx(1.0)
+    assert top_tail["median_target_delta"] < 0
+    assert top_tail["target_p25"] is not None
+    assert top_tail["target_p75"] is not None
