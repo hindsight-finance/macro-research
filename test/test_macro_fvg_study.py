@@ -2102,6 +2102,89 @@ def test_build_summary_tables_includes_delta_dominance_success_context_scopes():
     assert bearish_abs_side_row["n_successful"] == 1
     assert bearish_abs_side_row["successful_share_of_confirmable"] == 1.0
 
+
+def test_build_summary_tables_includes_delta_dominance_by_creation_minute():
+    enriched = enrich_fvg_events_with_delta_dominance(
+        make_delta_events_for_dominance(),
+        make_delta_5s_for_dominance(),
+    ).with_columns(
+        pl.lit("stage_1").alias("assigned_stage"),
+        pl.Series("assigned_minute_index", [0, 0, 1, 1]),
+        pl.Series("assigned_minute_hhmm", ["15:50", "15:50", "15:51", "15:51"]),
+        pl.lit(100).alias("bar2_volume"),
+        pl.lit("3_aligned").alias("alignment_bucket"),
+        pl.Series("minute_block", ["15:50-15:52", "15:50-15:52", "15:50-15:52", "15:50-15:52"]),
+        pl.lit(">=2.25").alias("gap_size_bucket_225"),
+        pl.lit(True).alias("entry_triggered_by_1559"),
+        pl.lit(True).alias("held_to_1559_close"),
+        pl.lit(False).alias("invalidated_by_1559"),
+        pl.lit(False).alias("untouched_to_1559_close"),
+        pl.lit(False).alias("retraced_in_stage_2"),
+        pl.lit(False).alias("invalidated_in_stage_2"),
+        pl.lit(True).alias("held_through_stage_2"),
+        pl.lit(False).alias("untouched_through_stage_2"),
+        pl.lit(False).alias("stacked_continuation_fvg"),
+    )
+
+    summary = macro_fvg_study.build_summary_tables(enriched)
+    scopes = set(summary["summary_scope"].to_list())
+
+    assert "success_context_creation_minute_aligned_delta_imbalance_quantile" in scopes
+    assert "success_context_creation_minute_abs_delta_imbalance_quantile" in scopes
+
+    row = filter_one(
+        summary,
+        (pl.col("summary_scope") == "success_context_creation_minute_aligned_delta_imbalance_quantile")
+        & (pl.col("assigned_minute_hhmm") == "15:51")
+        & (pl.col("aligned_delta_imbalance_quantile") == "q4_highest"),
+    )
+    assert row["n_confirmable"] == 1
+    assert row["n_retraced"] == 1
+    assert row["n_successful"] == 1
+    assert row["successful_share_of_confirmable"] == 1.0
+
+
+def test_build_summary_tables_includes_delta_dominance_by_minute_block():
+    enriched = enrich_fvg_events_with_delta_dominance(
+        make_delta_events_for_dominance(),
+        make_delta_5s_for_dominance(),
+    ).with_columns(
+        pl.lit("stage_1").alias("assigned_stage"),
+        pl.Series("assigned_minute_index", [0, 1, 5, 5]),
+        pl.Series("assigned_minute_hhmm", ["15:50", "15:51", "15:55", "15:55"]),
+        pl.lit(100).alias("bar2_volume"),
+        pl.lit("3_aligned").alias("alignment_bucket"),
+        pl.Series("minute_block", ["15:50-15:52", "15:50-15:52", "15:53-15:57", "15:53-15:57"]),
+        pl.lit(">=2.25").alias("gap_size_bucket_225"),
+        pl.lit(True).alias("entry_triggered_by_1559"),
+        pl.lit(True).alias("held_to_1559_close"),
+        pl.lit(False).alias("invalidated_by_1559"),
+        pl.lit(False).alias("untouched_to_1559_close"),
+        pl.lit(False).alias("retraced_in_stage_2"),
+        pl.lit(False).alias("invalidated_in_stage_2"),
+        pl.lit(True).alias("held_through_stage_2"),
+        pl.lit(False).alias("untouched_through_stage_2"),
+        pl.lit(False).alias("stacked_continuation_fvg"),
+    )
+
+    summary = macro_fvg_study.build_summary_tables(enriched)
+    scopes = set(summary["summary_scope"].to_list())
+
+    assert "success_context_minute_block_aligned_delta_imbalance_quantile" in scopes
+    assert "success_context_minute_block_abs_delta_imbalance_quantile" in scopes
+
+    row = filter_one(
+        summary,
+        (pl.col("summary_scope") == "success_context_minute_block_abs_delta_imbalance_quantile")
+        & (pl.col("minute_block") == "15:53-15:57")
+        & (pl.col("abs_delta_imbalance_quantile") == "q4_highest"),
+    )
+    assert row["n_confirmable"] == 1
+    assert row["n_retraced"] == 1
+    assert row["n_successful"] == 1
+    assert row["successful_share_of_confirmable"] == 1.0
+
+
 def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     input_path = tmp_path / "nq_1m.parquet"
     events_path = tmp_path / "nq_macro_fvg_events.parquet"

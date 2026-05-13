@@ -702,6 +702,42 @@ def build_success_context_side_abs_delta_imbalance_quantile_summary(events: pl.D
     )
 
 
+def build_success_context_creation_minute_aligned_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "aligned_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        ["assigned_minute_index", "assigned_minute_hhmm", column],
+        "success_context_creation_minute_aligned_delta_imbalance_quantile",
+    )
+
+
+def build_success_context_creation_minute_abs_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "abs_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        ["assigned_minute_index", "assigned_minute_hhmm", column],
+        "success_context_creation_minute_abs_delta_imbalance_quantile",
+    )
+
+
+def build_success_context_minute_block_aligned_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "aligned_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        ["minute_block", column],
+        "success_context_minute_block_aligned_delta_imbalance_quantile",
+    )
+
+
+def build_success_context_minute_block_abs_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "abs_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        ["minute_block", column],
+        "success_context_minute_block_abs_delta_imbalance_quantile",
+    )
+
+
 def build_stage_summary_tables(events: pl.DataFrame) -> pl.DataFrame:
     stage_1 = events.filter(pl.col("assigned_stage") == "stage_1")
     stage_2 = events.filter(pl.col("assigned_stage") == "stage_2")
@@ -725,6 +761,10 @@ def build_summary_tables(events: pl.DataFrame) -> pl.DataFrame:
         build_success_context_abs_delta_imbalance_quantile_summary(events),
         build_success_context_side_aligned_delta_imbalance_quantile_summary(events),
         build_success_context_side_abs_delta_imbalance_quantile_summary(events),
+        build_success_context_creation_minute_aligned_delta_imbalance_quantile_summary(events),
+        build_success_context_creation_minute_abs_delta_imbalance_quantile_summary(events),
+        build_success_context_minute_block_aligned_delta_imbalance_quantile_summary(events),
+        build_success_context_minute_block_abs_delta_imbalance_quantile_summary(events),
     ]
     non_empty = [frame for frame in frames if not frame.is_empty()]
     return pl.concat(non_empty, how="diagonal_relaxed").select(SUMMARY_COLUMNS) if non_empty else _summary_frame([])
