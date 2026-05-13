@@ -144,3 +144,45 @@ def test_build_macro_delta_reversal_adds_signs_and_relationship_flags():
     assert day2["eth_pre_rth_opposes_k359"] is False
     assert day2["eth_pre_rth_same_as_k359"] is False
     assert day2["eth_pre_rth_has_signal"] is False
+
+
+def test_summarize_macro_delta_reversal_computes_predictor_statistics():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 930, 10, 20, 20),
+            _g("2025-01-03", 930, -8, 16, 16),
+            _g("2025-01-04", 930, 0, 10, 10),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 50, -2, 4, 4),
+            _m("2025-01-02", 59, -5, 10, 10),
+            _m("2025-01-03", 50, 2, 4, 4),
+            _m("2025-01-03", 59, 4, 8, 8),
+            _m("2025-01-04", 50, 0, 3, 3),
+            _m("2025-01-04", 59, 3, 6, 6),
+        ]
+    )
+    study = build_macro_delta_reversal(globex, macro)
+
+    summary = summarize_macro_delta_reversal(study)
+    rth = summary.filter((pl.col("summary_type") == "sign") & (pl.col("predictor") == "rth_pre_macro")).row(
+        0, named=True
+    )
+
+    assert rth["n_days"] == 3
+    assert rth["n_signal_days"] == 2
+    assert rth["opposite_count"] == 2
+    assert rth["opposite_rate"] == pytest.approx(1.0)
+    assert rth["same_count"] == 0
+    assert rth["same_rate"] == pytest.approx(0.0)
+    assert rth["zero_predictor_count"] == 1
+    assert rth["zero_k359_count"] == 0
+    assert rth["mean_predictor_delta"] == pytest.approx((10 - 8 + 0) / 3)
+    assert rth["median_predictor_delta"] == pytest.approx(0.0)
+    assert rth["mean_k359_delta_when_predictor_positive"] == pytest.approx(-5.0)
+    assert rth["mean_k359_delta_when_predictor_negative"] == pytest.approx(4.0)
+    assert rth["median_k359_delta_when_predictor_positive"] == pytest.approx(-5.0)
+    assert rth["median_k359_delta_when_predictor_negative"] == pytest.approx(4.0)
+    assert rth["pearson_corr_predictor_vs_k359_delta"] < 0

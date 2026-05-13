@@ -177,8 +177,54 @@ def build_macro_delta_reversal(globex_1m: pl.DataFrame, macro_1m: pl.DataFrame) 
     return _add_signs_and_relationships(out.rename({"trade_date_et": "date"})).sort("date")
 
 
+def _rate(numer: int, denom: int) -> float | None:
+    return (numer / denom) if denom else None
+
+
+def _mean_for_sign(study: pl.DataFrame, predictor: str, sign: int) -> float | None:
+    values = study.filter(pl.col(f"{predictor}_sign") == sign).select(pl.col("k359_volume_delta").mean()).item()
+    return None if values is None else float(values)
+
+
+def _median_for_sign(study: pl.DataFrame, predictor: str, sign: int) -> float | None:
+    values = study.filter(pl.col(f"{predictor}_sign") == sign).select(pl.col("k359_volume_delta").median()).item()
+    return None if values is None else float(values)
+
+
 def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
-    return pl.DataFrame()
+    rows: list[dict] = []
+    n_days = study.height
+    for predictor in PREDICTORS:
+        signal = study.filter(pl.col(f"{predictor}_has_signal"))
+        n_signal_days = signal.height
+        opposite_count = study.filter(pl.col(f"{predictor}_opposes_k359")).height
+        same_count = study.filter(pl.col(f"{predictor}_same_as_k359")).height
+        corr = study.select(pl.corr(f"{predictor}_volume_delta", "k359_volume_delta")).item()
+        rows.append(
+            {
+                "summary_type": "sign",
+                "predictor": predictor,
+                "predictor_decile": None,
+                "n_days": n_days,
+                "n_signal_days": n_signal_days,
+                "opposite_count": opposite_count,
+                "opposite_rate": _rate(opposite_count, n_signal_days),
+                "same_count": same_count,
+                "same_rate": _rate(same_count, n_signal_days),
+                "zero_predictor_count": study.filter(pl.col(f"{predictor}_sign") == 0).height,
+                "zero_k359_count": study.filter(pl.col("k359_sign") == 0).height,
+                "mean_predictor_delta": study.select(pl.col(f"{predictor}_volume_delta").mean()).item(),
+                "median_predictor_delta": study.select(pl.col(f"{predictor}_volume_delta").median()).item(),
+                "mean_k359_delta": study.select(pl.col("k359_volume_delta").mean()).item(),
+                "median_k359_delta": study.select(pl.col("k359_volume_delta").median()).item(),
+                "mean_k359_delta_when_predictor_positive": _mean_for_sign(study, predictor, 1),
+                "mean_k359_delta_when_predictor_negative": _mean_for_sign(study, predictor, -1),
+                "median_k359_delta_when_predictor_positive": _median_for_sign(study, predictor, 1),
+                "median_k359_delta_when_predictor_negative": _median_for_sign(study, predictor, -1),
+                "pearson_corr_predictor_vs_k359_delta": corr,
+            }
+        )
+    return pl.DataFrame(rows)
 
 
 def load_volume_delta_inputs(
