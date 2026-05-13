@@ -25,6 +25,20 @@ except ModuleNotFoundError:
         normalize_minute_bars,
     )
 
+try:
+    from features.macro_fvg_delta_dominance import (
+        DELTA_DOMINANCE_COLUMNS,
+        try_enrich_fvg_events_with_delta_dominance,
+    )
+    from volume_delta import OUTPUT_MACRO_5S_PATH
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from features.macro_fvg_delta_dominance import (
+        DELTA_DOMINANCE_COLUMNS,
+        try_enrich_fvg_events_with_delta_dominance,
+    )
+    from volume_delta import OUTPUT_MACRO_5S_PATH
+
 INPUT_PATH = Path("outputs/nq_minute_base.parquet")
 EVENTS_OUTPUT_PATH = Path("outputs/nq_macro_fvg_events.parquet")
 SUMMARY_OUTPUT_PATH = Path("outputs/nq_macro_fvg_summary.parquet")
@@ -73,6 +87,8 @@ SUMMARY_COLUMNS = [
     "assigned_minute_hhmm",
     "assigned_minute_index",
     "bar2_volume_bucket",
+    "aligned_delta_imbalance_quantile",
+    "abs_delta_imbalance_quantile",
 ]
 
 EVENT_COLUMNS = [
@@ -82,6 +98,7 @@ EVENT_COLUMNS = [
     "bar1_direction", "bar2_direction", "bar3_direction", "aligned_count",
     "opposite_count", "neutral_count", "alignment_bucket", "minute_block",
     "gap_size_bucket_225", "stacked_continuation_fvg", "stack_predecessor_assigned_at",
+    *DELTA_DOMINANCE_COLUMNS,
 ]
 
 OUTCOME_COLUMNS = [
@@ -301,7 +318,12 @@ def detect_macro_fvgs(df: pl.DataFrame) -> pl.DataFrame:
             "gap_size_bucket_225": "<2.25" if (gap_top - gap_bottom) < 2.25 else ">=2.25",
             "bar3_time": row["bar3_time"],
         })
-    return mark_stacked_continuation_fvgs(pl.DataFrame(rows)).select(EVENT_COLUMNS)
+    if not rows:
+        return _frame_from_rows([], EVENT_COLUMNS)
+    events = mark_stacked_continuation_fvgs(pl.DataFrame(rows))
+    return events.with_columns(
+        [pl.lit(None).alias(column) for column in EVENT_COLUMNS if column not in events.columns]
+    ).select(EVENT_COLUMNS)
 
 def _blank_outcomes(entry_price: float, held: bool, untouched: bool, last_observed_at: datetime | None) -> dict:
     return {
@@ -552,7 +574,7 @@ def _group_success_context_stats(events: pl.DataFrame, group_cols: list[str], sc
         row = dict(zip(group_cols, key))
         row.update({
             "summary_scope": scope_name,
-            "fvg_side": None,
+            "fvg_side": row.get("fvg_side"),
             "n_total": len(group),
             "n_confirmable": n_confirmable,
             "n_retraced": n_retraced,
@@ -638,6 +660,48 @@ def build_success_context_alignment_bucket_stacked_flag_summary(events: pl.DataF
     return _group_success_context_stats(events, ["alignment_bucket", "stacked_continuation_fvg"], "success_context_alignment_bucket_stacked_flag")
 
 
+def _filter_non_null(events: pl.DataFrame, column: str) -> pl.DataFrame:
+    if column not in events.columns:
+        return pl.DataFrame({name: [] for name in events.columns})
+    return events.filter(pl.col(column).is_not_null())
+
+
+def build_success_context_aligned_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "aligned_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        [column],
+        "success_context_aligned_delta_imbalance_quantile",
+    )
+
+
+def build_success_context_abs_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "abs_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        [column],
+        "success_context_abs_delta_imbalance_quantile",
+    )
+
+
+def build_success_context_side_aligned_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "aligned_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        ["fvg_side", column],
+        "success_context_side_aligned_delta_imbalance_quantile",
+    )
+
+
+def build_success_context_side_abs_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "abs_delta_imbalance_quantile"
+    return _group_success_context_stats(
+        _filter_non_null(events, column),
+        ["fvg_side", column],
+        "success_context_side_abs_delta_imbalance_quantile",
+    )
+
+
 def build_stage_summary_tables(events: pl.DataFrame) -> pl.DataFrame:
     stage_1 = events.filter(pl.col("assigned_stage") == "stage_1")
     stage_2 = events.filter(pl.col("assigned_stage") == "stage_2")
@@ -657,6 +721,10 @@ def build_summary_tables(events: pl.DataFrame) -> pl.DataFrame:
         build_entry_excursion_gap_bucket_summary(events), build_entry_excursion_alignment_bucket_minute_block_summary(events),
         build_success_context_summary(events), build_success_context_alignment_bucket_summary(events), build_success_context_stacked_flag_summary(events),
         build_success_context_alignment_bucket_stacked_flag_summary(events),
+        build_success_context_aligned_delta_imbalance_quantile_summary(events),
+        build_success_context_abs_delta_imbalance_quantile_summary(events),
+        build_success_context_side_aligned_delta_imbalance_quantile_summary(events),
+        build_success_context_side_abs_delta_imbalance_quantile_summary(events),
     ]
     non_empty = [frame for frame in frames if not frame.is_empty()]
     return pl.concat(non_empty, how="diagonal_relaxed").select(SUMMARY_COLUMNS) if non_empty else _summary_frame([])
@@ -895,10 +963,12 @@ def run_macro_fvg_study(
     events_output_path: Path = EVENTS_OUTPUT_PATH,
     summary_output_path: Path = SUMMARY_OUTPUT_PATH,
     figures_dir: Path = FIGURES_DIR,
+    volume_delta_5s_path: Path = OUTPUT_MACRO_5S_PATH,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     bars = load_minute_bars(input_path)
     events = detect_macro_fvgs(bars)
     events = scan_fvg_outcomes_until_1559_close(events, bars)
+    events = try_enrich_fvg_events_with_delta_dominance(events, volume_delta_5s_path)
     summary = build_summary_tables(events)
     events_output_path.parent.mkdir(parents=True, exist_ok=True)
     summary_output_path.parent.mkdir(parents=True, exist_ok=True)

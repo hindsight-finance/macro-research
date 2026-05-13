@@ -2050,6 +2050,58 @@ def test_load_macro_volume_delta_5s_requires_expected_columns(tmp_path):
         load_macro_volume_delta_5s(bad_path)
 
 
+
+def test_build_summary_tables_includes_delta_dominance_success_context_scopes():
+    enriched = enrich_fvg_events_with_delta_dominance(
+        make_delta_events_for_dominance(),
+        make_delta_5s_for_dominance(),
+    ).with_columns(
+        pl.lit("stage_1").alias("assigned_stage"),
+        pl.lit(0).alias("assigned_minute_index"),
+        pl.lit("15:50").alias("assigned_minute_hhmm"),
+        pl.lit(100).alias("bar2_volume"),
+        pl.lit("3_aligned").alias("alignment_bucket"),
+        pl.lit("15:50-15:52").alias("minute_block"),
+        pl.lit(">=2.25").alias("gap_size_bucket_225"),
+        pl.lit(True).alias("entry_triggered_by_1559"),
+        pl.lit(True).alias("held_to_1559_close"),
+        pl.lit(False).alias("invalidated_by_1559"),
+        pl.lit(False).alias("untouched_to_1559_close"),
+        pl.lit(False).alias("retraced_in_stage_2"),
+        pl.lit(False).alias("invalidated_in_stage_2"),
+        pl.lit(True).alias("held_through_stage_2"),
+        pl.lit(False).alias("untouched_through_stage_2"),
+        pl.lit(False).alias("stacked_continuation_fvg"),
+    )
+
+    summary = macro_fvg_study.build_summary_tables(enriched)
+
+    scopes = set(summary["summary_scope"].to_list())
+    assert "success_context_aligned_delta_imbalance_quantile" in scopes
+    assert "success_context_abs_delta_imbalance_quantile" in scopes
+    assert "success_context_side_aligned_delta_imbalance_quantile" in scopes
+    assert "success_context_side_abs_delta_imbalance_quantile" in scopes
+
+    aligned_row = filter_one(
+        summary,
+        (pl.col("summary_scope") == "success_context_aligned_delta_imbalance_quantile")
+        & (pl.col("aligned_delta_imbalance_quantile") == "q4_highest"),
+    )
+    assert aligned_row["n_confirmable"] == 1
+    assert aligned_row["n_retraced"] == 1
+    assert aligned_row["n_successful"] == 1
+    assert aligned_row["successful_share_of_confirmable"] == 1.0
+
+    bearish_abs_side_row = filter_one(
+        summary,
+        (pl.col("summary_scope") == "success_context_side_abs_delta_imbalance_quantile")
+        & (pl.col("fvg_side") == "bearish")
+        & (pl.col("abs_delta_imbalance_quantile") == "q4_highest"),
+    )
+    assert bearish_abs_side_row["n_confirmable"] == 1
+    assert bearish_abs_side_row["n_successful"] == 1
+    assert bearish_abs_side_row["successful_share_of_confirmable"] == 1.0
+
 def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     input_path = tmp_path / "nq_1m.parquet"
     events_path = tmp_path / "nq_macro_fvg_events.parquet"
