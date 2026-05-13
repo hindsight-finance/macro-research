@@ -210,12 +210,13 @@ def _add_pre_35940_predictors(frame: pl.DataFrame) -> pl.DataFrame:
 
 
 def _add_signs_and_relationships(frame: pl.DataFrame) -> pl.DataFrame:
+    predictors = [predictor for predictor in PREDICTORS if f"{predictor}_volume_delta" in frame.columns]
     target_names = [target for target in TARGET_WINDOWS if f"{target}_volume_delta" in frame.columns]
-    sign_names = [*PREDICTORS, *target_names]
+    sign_names = [*predictors, *target_names]
     out = frame.with_columns([_sign_expr(f"{name}_volume_delta").alias(f"{name}_sign") for name in sign_names])
 
     relationship_exprs: list[pl.Expr] = []
-    for predictor in PREDICTORS:
+    for predictor in predictors:
         pred_sign = pl.col(f"{predictor}_sign")
         target_sign = pl.col("k359_sign")
         has_signal = (pred_sign != 0) & (target_sign != 0)
@@ -348,6 +349,10 @@ def _decile_rows(study: pl.DataFrame, predictor: str) -> list[dict]:
 
 def _available_target_windows(study: pl.DataFrame) -> list[str]:
     return [target for target in TARGET_WINDOWS if f"{target}_volume_delta" in study.columns]
+
+
+def _available_predictors(study: pl.DataFrame, predictors: list[str]) -> list[str]:
+    return [predictor for predictor in predictors if f"{predictor}_volume_delta" in study.columns]
 
 
 def _target_values_for_predictor_sign(study: pl.DataFrame, predictor: str, target: str, sign: int) -> pl.DataFrame:
@@ -530,9 +535,11 @@ def _normalize_summary_rows(rows: list[dict]) -> list[dict]:
 def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict] = []
     n_days = study.height
+    available_predictors = _available_predictors(study, PREDICTORS)
+    available_primary_predictors = _available_predictors(study, PRIMARY_PREDICTORS)
     available_targets = _available_target_windows(study)
     robust_targets = [target for target in ROBUST_TARGET_WINDOWS if target in available_targets]
-    for predictor in PREDICTORS:
+    for predictor in available_predictors:
         signal = study.filter(pl.col(f"{predictor}_has_signal"))
         n_signal_days = signal.height
         opposite_count = study.filter(pl.col(f"{predictor}_opposes_k359")).height
@@ -563,7 +570,7 @@ def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
             }
         )
         rows.extend(_decile_rows(study, predictor))
-    for predictor in PRIMARY_PREDICTORS:
+    for predictor in available_primary_predictors:
         for target in available_targets:
             rows.append(_target_pair_sign_row(study, predictor, target))
         for target in robust_targets:

@@ -532,7 +532,14 @@ def test_write_macro_delta_reversal_persists_study_and_summary(tmp_path: Path):
     summary = pl.read_parquet(summary_path)
     assert study.height == 1
     assert study.row(0, named=True)["rth_pre_macro_opposes_k359"] is True
-    assert summary.filter(pl.col("summary_type") == "sign").height == 9
+    sign_predictors = (
+        summary.filter(pl.col("summary_type") == "sign")
+        .select("predictor")
+        .to_series()
+        .to_list()
+    )
+    assert len(sign_predictors) == 12
+    assert "eth_rth_pre_35940" in sign_predictors
 
 
 def test_write_macro_delta_reversal_requires_macro_5s_path_argument(tmp_path: Path):
