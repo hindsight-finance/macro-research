@@ -43,6 +43,9 @@ PREDICTORS = [
     "eth_rth_pre59",
     "eth_rth_macro_pre59",
     "rth_macro_pre59",
+    "eth_rth_pre_35940",
+    "rth_pre_35940",
+    "eth_rth_pre_35950",
 ]
 
 PRIMARY_PREDICTOR_ALIASES = {
@@ -51,12 +54,16 @@ PRIMARY_PREDICTOR_ALIASES = {
     "rth_macro_pre59": "rth_plus_macro_pre59",
 }
 
-PRIMARY_PREDICTORS = list(PRIMARY_PREDICTOR_ALIASES.keys())
+PRIMARY_PREDICTORS = [*PRIMARY_PREDICTOR_ALIASES.keys(), "eth_rth_pre_35940", "rth_pre_35940", "eth_rth_pre_35950"]
 
 TARGET_WINDOWS_5S = {
     "k359_00_59": (108, 119),
     "k359_00_29": (108, 113),
+    "k359_00_39": (108, 115),
+    "k359_00_49": (108, 117),
     "k359_30_59": (114, 119),
+    "k359_40_49": (116, 117),
+    "k359_40_59": (116, 119),
     "k359_45_59": (117, 119),
     "k359_50_59": (118, 119),
 }
@@ -191,6 +198,17 @@ def _join_359_5s_targets(frame: pl.DataFrame, macro_5s: pl.DataFrame | None) -> 
     return out
 
 
+def _add_pre_35940_predictors(frame: pl.DataFrame) -> pl.DataFrame:
+    if "k359_00_39_volume_delta" not in frame.columns:
+        return frame
+
+    out = _add_combined_window(frame, "day_plus_macro_pre59", "k359_00_39", "eth_rth_pre_35940")
+    out = _add_combined_window(out, "rth_plus_macro_pre59", "k359_00_39", "rth_pre_35940")
+    if "k359_40_49_volume_delta" in out.columns:
+        out = _add_combined_window(out, "eth_rth_pre_35940", "k359_40_49", "eth_rth_pre_35950")
+    return out
+
+
 def _add_signs_and_relationships(frame: pl.DataFrame) -> pl.DataFrame:
     target_names = [target for target in TARGET_WINDOWS if f"{target}_volume_delta" in frame.columns]
     sign_names = [*PREDICTORS, *target_names]
@@ -256,6 +274,7 @@ def build_macro_delta_reversal(
     out = _add_combined_window(out, "rth_pre_macro", "macro_pre59", "rth_plus_macro_pre59")
     out = _add_combined_window(out, "day_pre_macro", "macro_pre59", "day_plus_macro_pre59")
     out = _join_359_5s_targets(out, macro_5s)
+    out = _add_pre_35940_predictors(out)
     out = _add_primary_predictor_aliases(out.rename({"trade_date_et": "date"}))
     return _add_signs_and_relationships(out).sort("date")
 

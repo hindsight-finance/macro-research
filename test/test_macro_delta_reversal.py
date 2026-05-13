@@ -238,6 +238,46 @@ def test_build_macro_delta_reversal_aggregates_359_5s_target_windows():
     assert "k359_bucket_107_volume_delta" not in out.columns
 
 
+def test_build_macro_delta_reversal_adds_pre_35940_predictors_and_last_20s_target():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 0, 3, 6, 6),
+            _g("2025-01-02", 930, 7, 14, 14),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 50, -2, 4, 4),
+            _m("2025-01-02", 59, -20, 40, 40),
+        ]
+    )
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 108, 1, 2, 2),
+            _s("2025-01-02", 115, 4, 8, 8),
+            _s("2025-01-02", 116, -5, 10, 10),
+            _s("2025-01-02", 117, -6, 12, 12),
+            _s("2025-01-02", 118, -7, 14, 14),
+            _s("2025-01-02", 119, -8, 16, 16),
+        ]
+    )
+
+    out = build_macro_delta_reversal(globex, macro, macro_5s)
+    row = out.row(0, named=True)
+
+    assert row["k359_00_39_volume_delta"] == 5
+    assert row["k359_00_39_classified_size"] == 10
+    assert row["k359_40_59_volume_delta"] == -26
+    assert row["k359_40_59_classified_size"] == 52
+    assert row["k359_40_49_volume_delta"] == -11
+    assert row["eth_rth_pre_35940_volume_delta"] == 13
+    assert row["eth_rth_pre_35940_classified_size"] == 34
+    assert row["eth_rth_pre_35940_delta_imbalance"] == pytest.approx(13 / 34)
+    assert row["rth_pre_35940_volume_delta"] == 10
+    assert row["eth_rth_pre_35950_volume_delta"] == 2
+    assert row["eth_rth_pre_35940_opposes_k359"] is True
+
+
 def test_summarize_macro_delta_reversal_computes_predictor_statistics():
     globex = _globex_rows(
         [
@@ -316,6 +356,46 @@ def test_summarize_macro_delta_reversal_adds_target_aware_sign_rows():
     assert row["opposite_rate"] == pytest.approx(1.0)
     assert row["same_count"] == 0
     assert row["zero_target_count"] == 0
+    assert row["median_target_delta_when_predictor_positive"] == pytest.approx(-5.0)
+    assert row["median_target_delta_when_predictor_negative"] == pytest.approx(5.0)
+
+
+def test_summarize_macro_delta_reversal_adds_pre_35940_to_last_20s_rows():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 930, 10),
+            _g("2025-01-03", 930, -10),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 50, 1),
+            _m("2025-01-02", 59, -5),
+            _m("2025-01-03", 50, -1),
+            _m("2025-01-03", 59, 5),
+        ]
+    )
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 108, 2),
+            _s("2025-01-02", 116, -2),
+            _s("2025-01-02", 117, -3),
+            _s("2025-01-03", 108, -2),
+            _s("2025-01-03", 116, 2),
+            _s("2025-01-03", 117, 3),
+        ]
+    )
+    study = build_macro_delta_reversal(globex, macro, macro_5s)
+
+    summary = summarize_macro_delta_reversal(study)
+    row = summary.filter(
+        (pl.col("summary_type") == "target_sign")
+        & (pl.col("predictor") == "eth_rth_pre_35940")
+        & (pl.col("target_window") == "k359_40_59")
+    ).row(0, named=True)
+
+    assert row["n_signal_days"] == 2
+    assert row["opposite_rate"] == pytest.approx(1.0)
     assert row["median_target_delta_when_predictor_positive"] == pytest.approx(-5.0)
     assert row["median_target_delta_when_predictor_negative"] == pytest.approx(5.0)
 
