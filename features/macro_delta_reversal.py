@@ -326,6 +326,66 @@ def _decile_rows(study: pl.DataFrame, predictor: str) -> list[dict]:
     return rows
 
 
+def _available_target_windows(study: pl.DataFrame) -> list[str]:
+    return [target for target in TARGET_WINDOWS if f"{target}_volume_delta" in study.columns]
+
+
+def _target_values_for_predictor_sign(study: pl.DataFrame, predictor: str, target: str, sign: int) -> pl.DataFrame:
+    return study.filter(pl.col(f"{predictor}_sign") == sign).select(pl.col(f"{target}_volume_delta").alias("target_delta"))
+
+
+def _scalar_or_none(frame: pl.DataFrame, expr: pl.Expr) -> float | None:
+    value = frame.select(expr).item()
+    return None if value is None else float(value)
+
+
+def _target_pair_sign_row(study: pl.DataFrame, predictor: str, target: str) -> dict:
+    pred_sign = pl.col(f"{predictor}_sign")
+    target_sign = pl.col(f"{target}_sign")
+    has_signal_expr = (pred_sign != 0) & (target_sign != 0)
+    signal = study.filter(has_signal_expr)
+    n_signal_days = signal.height
+    opposite_count = study.filter(has_signal_expr & (pred_sign == -target_sign)).height
+    same_count = study.filter(has_signal_expr & (pred_sign == target_sign)).height
+    pos = _target_values_for_predictor_sign(study, predictor, target, 1)
+    neg = _target_values_for_predictor_sign(study, predictor, target, -1)
+    corr = study.select(pl.corr(f"{predictor}_volume_delta", f"{target}_volume_delta")).item()
+    return {
+        "summary_type": "target_sign",
+        "predictor": predictor,
+        "target_window": target,
+        "predictor_decile": None,
+        "tail": None,
+        "condition": None,
+        "n_days": study.height,
+        "n_signal_days": n_signal_days,
+        "opposite_count": opposite_count,
+        "opposite_rate": _rate(opposite_count, n_signal_days),
+        "same_count": same_count,
+        "same_rate": _rate(same_count, n_signal_days),
+        "zero_predictor_count": study.filter(pred_sign == 0).height,
+        "zero_target_count": study.filter(target_sign == 0).height,
+        "mean_predictor_delta": study.select(pl.col(f"{predictor}_volume_delta").mean()).item(),
+        "median_predictor_delta": study.select(pl.col(f"{predictor}_volume_delta").median()).item(),
+        "mean_target_delta": study.select(pl.col(f"{target}_volume_delta").mean()).item(),
+        "median_target_delta": study.select(pl.col(f"{target}_volume_delta").median()).item(),
+        "mean_target_delta_when_predictor_positive": _scalar_or_none(pos, pl.col("target_delta").mean()),
+        "mean_target_delta_when_predictor_negative": _scalar_or_none(neg, pl.col("target_delta").mean()),
+        "median_target_delta_when_predictor_positive": _scalar_or_none(pos, pl.col("target_delta").median()),
+        "median_target_delta_when_predictor_negative": _scalar_or_none(neg, pl.col("target_delta").median()),
+        "target_p25_when_predictor_positive": _scalar_or_none(pos, pl.col("target_delta").quantile(0.25)),
+        "target_p75_when_predictor_positive": _scalar_or_none(pos, pl.col("target_delta").quantile(0.75)),
+        "target_p25_when_predictor_negative": _scalar_or_none(neg, pl.col("target_delta").quantile(0.25)),
+        "target_p75_when_predictor_negative": _scalar_or_none(neg, pl.col("target_delta").quantile(0.75)),
+        "pearson_corr_predictor_vs_target_delta": corr,
+    }
+
+
+def _normalize_summary_rows(rows: list[dict]) -> list[dict]:
+    keys = sorted({key for row in rows for key in row})
+    return [{key: row.get(key) for key in keys} for row in rows]
+
+
 def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict] = []
     n_days = study.height
@@ -360,7 +420,10 @@ def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
             }
         )
         rows.extend(_decile_rows(study, predictor))
-    return pl.DataFrame(rows)
+    for predictor in PRIMARY_PREDICTORS:
+        for target in _available_target_windows(study):
+            rows.append(_target_pair_sign_row(study, predictor, target))
+    return pl.DataFrame(_normalize_summary_rows(rows))
 
 
 def load_volume_delta_inputs(

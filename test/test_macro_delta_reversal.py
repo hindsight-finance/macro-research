@@ -280,6 +280,46 @@ def test_summarize_macro_delta_reversal_computes_predictor_statistics():
     assert rth["pearson_corr_predictor_vs_k359_delta"] < 0
 
 
+def test_summarize_macro_delta_reversal_adds_target_aware_sign_rows():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 930, 10, 20, 20),
+            _g("2025-01-03", 930, -10, 20, 20),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 59, -5, 10, 10),
+            _m("2025-01-03", 59, 5, 10, 10),
+        ]
+    )
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 118, -2, 4, 4),
+            _s("2025-01-02", 119, -3, 6, 6),
+            _s("2025-01-03", 118, 2, 4, 4),
+            _s("2025-01-03", 119, 3, 6, 6),
+        ]
+    )
+    study = build_macro_delta_reversal(globex, macro, macro_5s)
+
+    summary = summarize_macro_delta_reversal(study)
+    row = summary.filter(
+        (pl.col("summary_type") == "target_sign")
+        & (pl.col("predictor") == "rth_macro_pre59")
+        & (pl.col("target_window") == "k359_50_59")
+    ).row(0, named=True)
+
+    assert row["n_days"] == 2
+    assert row["n_signal_days"] == 2
+    assert row["opposite_count"] == 2
+    assert row["opposite_rate"] == pytest.approx(1.0)
+    assert row["same_count"] == 0
+    assert row["zero_target_count"] == 0
+    assert row["median_target_delta_when_predictor_positive"] == pytest.approx(-5.0)
+    assert row["median_target_delta_when_predictor_negative"] == pytest.approx(5.0)
+
+
 def test_summarize_macro_delta_reversal_adds_decile_rows_when_enough_unique_values():
     globex = _globex_rows([_g(f"2025-01-{day:02d}", 930, day) for day in range(2, 14)])
     macro = _macro_rows([_m(f"2025-01-{day:02d}", 59, -day) for day in range(2, 14)])
