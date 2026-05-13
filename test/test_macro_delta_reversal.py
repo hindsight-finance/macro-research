@@ -103,3 +103,44 @@ def test_build_macro_delta_reversal_aggregates_core_windows_and_target():
     assert row["k359_classified_size"] == 18
     assert row["k359_total_size"] == 20
     assert row["k359_delta_imbalance"] == pytest.approx(-9 / 18)
+
+
+def test_build_macro_delta_reversal_adds_signs_and_relationship_flags():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 0, 10),
+            _g("2025-01-02", 930, 5),
+            _g("2025-01-03", 0, -8),
+            _g("2025-01-03", 930, 0, 10, 10),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 50, -3),
+            _m("2025-01-02", 59, -7),
+            _m("2025-01-03", 50, 4),
+            _m("2025-01-03", 59, 0, 12, 12),
+        ]
+    )
+
+    out = build_macro_delta_reversal(globex, macro)
+    day1 = out.filter(pl.col("date") == pl.date(2025, 1, 2)).row(0, named=True)
+    day2 = out.filter(pl.col("date") == pl.date(2025, 1, 3)).row(0, named=True)
+
+    assert day1["eth_pre_rth_sign"] == 1
+    assert day1["rth_pre_macro_sign"] == 1
+    assert day1["macro_pre59_sign"] == -1
+    assert day1["k359_sign"] == -1
+    assert day1["eth_pre_rth_opposes_k359"] is True
+    assert day1["eth_pre_rth_same_as_k359"] is False
+    assert day1["eth_pre_rth_has_signal"] is True
+    assert day1["macro_pre59_opposes_rth_pre_macro"] is True
+    assert day1["macro_pre59_opposes_day_pre_macro"] is True
+    assert day1["k359_opposes_rth_plus_macro_pre59"] is True
+    assert day1["k359_opposes_day_plus_macro_pre59"] is True
+
+    assert day2["rth_pre_macro_sign"] == 0
+    assert day2["k359_sign"] == 0
+    assert day2["eth_pre_rth_opposes_k359"] is False
+    assert day2["eth_pre_rth_same_as_k359"] is False
+    assert day2["eth_pre_rth_has_signal"] is False

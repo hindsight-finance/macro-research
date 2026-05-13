@@ -105,6 +105,58 @@ def _add_combined_window(frame: pl.DataFrame, left: str, right: str, output: str
     )
 
 
+def _sign_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column) > 0)
+        .then(1)
+        .when(pl.col(column) < 0)
+        .then(-1)
+        .otherwise(0)
+    )
+
+
+def _add_signs_and_relationships(frame: pl.DataFrame) -> pl.DataFrame:
+    sign_names = [*PREDICTORS, "k359"]
+    out = frame.with_columns([_sign_expr(f"{name}_volume_delta").alias(f"{name}_sign") for name in sign_names])
+
+    relationship_exprs: list[pl.Expr] = []
+    for predictor in PREDICTORS:
+        pred_sign = pl.col(f"{predictor}_sign")
+        target_sign = pl.col("k359_sign")
+        has_signal = (pred_sign != 0) & (target_sign != 0)
+        relationship_exprs.extend(
+            [
+                has_signal.alias(f"{predictor}_has_signal"),
+                (has_signal & (pred_sign == -target_sign)).alias(f"{predictor}_opposes_k359"),
+                (has_signal & (pred_sign == target_sign)).alias(f"{predictor}_same_as_k359"),
+            ]
+        )
+
+    out = out.with_columns(relationship_exprs)
+    return out.with_columns(
+        (
+            (pl.col("macro_pre59_sign") != 0)
+            & (pl.col("rth_pre_macro_sign") != 0)
+            & (pl.col("macro_pre59_sign") == -pl.col("rth_pre_macro_sign"))
+        ).alias("macro_pre59_opposes_rth_pre_macro"),
+        (
+            (pl.col("macro_pre59_sign") != 0)
+            & (pl.col("day_pre_macro_sign") != 0)
+            & (pl.col("macro_pre59_sign") == -pl.col("day_pre_macro_sign"))
+        ).alias("macro_pre59_opposes_day_pre_macro"),
+        (
+            (pl.col("k359_sign") != 0)
+            & (pl.col("rth_plus_macro_pre59_sign") != 0)
+            & (pl.col("k359_sign") == -pl.col("rth_plus_macro_pre59_sign"))
+        ).alias("k359_opposes_rth_plus_macro_pre59"),
+        (
+            (pl.col("k359_sign") != 0)
+            & (pl.col("day_plus_macro_pre59_sign") != 0)
+            & (pl.col("k359_sign") == -pl.col("day_plus_macro_pre59_sign"))
+        ).alias("k359_opposes_day_plus_macro_pre59"),
+    )
+
+
 def build_macro_delta_reversal(globex_1m: pl.DataFrame, macro_1m: pl.DataFrame) -> pl.DataFrame:
     _validate_inputs(globex_1m, macro_1m)
 
@@ -122,7 +174,7 @@ def build_macro_delta_reversal(globex_1m: pl.DataFrame, macro_1m: pl.DataFrame) 
     )
     out = _add_combined_window(out, "rth_pre_macro", "macro_pre59", "rth_plus_macro_pre59")
     out = _add_combined_window(out, "day_pre_macro", "macro_pre59", "day_plus_macro_pre59")
-    return out.rename({"trade_date_et": "date"}).sort("date")
+    return _add_signs_and_relationships(out.rename({"trade_date_et": "date"})).sort("date")
 
 
 def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
