@@ -22,6 +22,8 @@ INPUT_PATH = Path("outputs/nq_minute_base.parquet")
 OUTPUT_PATH = Path("outputs/nq_macro_outcomes.parquet")
 MACRO_WINDOW_NAME = "MACRO"
 POST_WINDOW_CANDIDATES = {"post", "postclose", "post_close", "postmacro", "POST", "Post", "PostClose"}
+REGIME_INPUT_PATH = Path("outputs/nq_regimes.parquet")
+REGIME_CONTEXT_SESSIONS = ("1pm-3pm", "3pm-3:50pm")
 
 
 def _pct(numer, denom):
@@ -38,6 +40,48 @@ def _prepare_macro_bars(df: pl.DataFrame) -> pl.DataFrame:
 
 def _null_to_nan(value):
     return value if value is not None else math.nan
+
+
+def _regime_session_prefix(session_name: str) -> str:
+    return "regime_" + "".join(ch if ch.isalnum() else "_" for ch in session_name.lower()).strip("_")
+
+
+def join_regime_context(
+    macro: pl.DataFrame,
+    regimes: pl.DataFrame,
+    session_names: list[str] | tuple[str, ...],
+) -> pl.DataFrame:
+    required_macro = {"date"}
+    required_regime = {
+        "trade_date",
+        "session_name",
+        "regime_state",
+        "regime_direction",
+        "regime_confidence",
+        "regime_signal_composite",
+    }
+    missing_macro = required_macro - set(macro.columns)
+    missing_regime = required_regime - set(regimes.columns)
+    if missing_macro:
+        raise ValueError(f"Macro frame missing required columns: {missing_macro}")
+    if missing_regime:
+        raise ValueError(f"Regime frame missing required columns: {missing_regime}")
+
+    out = macro.clone()
+    for session_name in session_names:
+        prefix = _regime_session_prefix(session_name)
+        session_regimes = (
+            regimes.filter(pl.col("session_name") == session_name)
+            .select(
+                pl.col("trade_date").alias("date"),
+                pl.col("regime_state").alias(f"{prefix}_state"),
+                pl.col("regime_direction").alias(f"{prefix}_direction"),
+                pl.col("regime_confidence").alias(f"{prefix}_confidence"),
+                pl.col("regime_signal_composite").alias(f"{prefix}_signal_composite"),
+            )
+        )
+        out = out.join(session_regimes, on="date", how="left")
+    return out
 
 
 def compute_macro_outcomes(df: pl.DataFrame, macro_window_name: str) -> pl.DataFrame:
@@ -125,6 +169,9 @@ def main():
 
     df = load_minute_bars(in_path)
     feats = compute_macro_outcomes(df, macro_window_name=MACRO_WINDOW_NAME)
+    if REGIME_INPUT_PATH.exists():
+        regimes = pl.read_parquet(REGIME_INPUT_PATH)
+        feats = join_regime_context(feats, regimes, session_names=REGIME_CONTEXT_SESSIONS)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     feats.write_parquet(out_path)

@@ -1,3 +1,5 @@
+from datetime import date
+
 import polars as pl
 
 from macro_outcomes import compute_macro_outcomes
@@ -27,3 +29,27 @@ def test_compute_macro_outcomes_uses_datetime_utc_and_derived_macro_window():
     assert str(out.item(0, "date")) == "2020-09-01"
     assert out.item(0, "macro_open") == 101.0
     assert out.item(0, "postclose_range_points") == 1.5
+
+
+def test_join_regime_context_adds_prior_session_regimes_to_macro_rows():
+    macro = pl.DataFrame({"date": [date(2024, 1, 2)], "macro_range_points": [10.0]})
+    regimes = pl.DataFrame(
+        {
+            "trade_date": [date(2024, 1, 2), date(2024, 1, 2)],
+            "session_name": ["1pm-3pm", "3pm-3:50pm"],
+            "regime_state": ["STRONG_TREND", "CHOPPY"],
+            "regime_direction": ["UP", "DOWN"],
+            "regime_confidence": [0.8, 0.6],
+            "regime_signal_composite": [0.9, 0.2],
+        }
+    )
+
+    from macro_outcomes import join_regime_context
+
+    out = join_regime_context(macro, regimes, session_names=["1pm-3pm", "3pm-3:50pm"])
+
+    assert out.item(0, "regime_1pm_3pm_state") == "STRONG_TREND"
+    assert out.item(0, "regime_1pm_3pm_direction") == "UP"
+    assert out.item(0, "regime_1pm_3pm_confidence") == 0.8
+    assert out.item(0, "regime_3pm_3_50pm_state") == "CHOPPY"
+    assert out.item(0, "regime_3pm_3_50pm_signal_composite") == 0.2
