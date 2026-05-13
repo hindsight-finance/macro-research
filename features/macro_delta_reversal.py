@@ -191,6 +191,59 @@ def _median_for_sign(study: pl.DataFrame, predictor: str, sign: int) -> float | 
     return None if values is None else float(values)
 
 
+def _decile_rows(study: pl.DataFrame, predictor: str) -> list[dict]:
+    value_col = f"{predictor}_volume_delta"
+    non_null = study.filter(pl.col(value_col).is_not_null())
+    unique_count = non_null.select(pl.col(value_col).n_unique()).item() if not non_null.is_empty() else 0
+    if non_null.height < 10 or unique_count < 10:
+        return []
+
+    deciled = non_null.with_columns(
+        ((pl.col(value_col).rank(method="ordinal") - 1) * 10 / non_null.height)
+        .floor()
+        .cast(pl.Int64)
+        .clip(0, 9)
+        .add(1)
+        .alias("predictor_decile")
+    )
+
+    rows = []
+    for record in deciled.group_by("predictor_decile").agg(
+        pl.len().alias("n_days"),
+        pl.col(value_col).mean().alias("mean_predictor_delta"),
+        pl.col("k359_volume_delta").mean().alias("mean_k359_delta"),
+        pl.col(f"{predictor}_opposes_k359").sum().alias("opposite_count"),
+        pl.col(f"{predictor}_has_signal").sum().alias("n_signal_days"),
+    ).sort("predictor_decile").to_dicts():
+        n_signal_days = int(record["n_signal_days"])
+        opposite_count = int(record["opposite_count"])
+        rows.append(
+            {
+                "summary_type": "decile",
+                "predictor": predictor,
+                "predictor_decile": int(record["predictor_decile"]),
+                "n_days": int(record["n_days"]),
+                "n_signal_days": n_signal_days,
+                "opposite_count": opposite_count,
+                "opposite_rate": _rate(opposite_count, n_signal_days),
+                "same_count": None,
+                "same_rate": None,
+                "zero_predictor_count": None,
+                "zero_k359_count": None,
+                "mean_predictor_delta": float(record["mean_predictor_delta"]),
+                "median_predictor_delta": None,
+                "mean_k359_delta": float(record["mean_k359_delta"]),
+                "median_k359_delta": None,
+                "mean_k359_delta_when_predictor_positive": None,
+                "mean_k359_delta_when_predictor_negative": None,
+                "median_k359_delta_when_predictor_positive": None,
+                "median_k359_delta_when_predictor_negative": None,
+                "pearson_corr_predictor_vs_k359_delta": None,
+            }
+        )
+    return rows
+
+
 def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict] = []
     n_days = study.height
@@ -224,6 +277,7 @@ def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
                 "pearson_corr_predictor_vs_k359_delta": corr,
             }
         )
+        rows.extend(_decile_rows(study, predictor))
     return pl.DataFrame(rows)
 
 

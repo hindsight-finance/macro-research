@@ -186,3 +186,17 @@ def test_summarize_macro_delta_reversal_computes_predictor_statistics():
     assert rth["median_k359_delta_when_predictor_positive"] == pytest.approx(-5.0)
     assert rth["median_k359_delta_when_predictor_negative"] == pytest.approx(4.0)
     assert rth["pearson_corr_predictor_vs_k359_delta"] < 0
+
+
+def test_summarize_macro_delta_reversal_adds_decile_rows_when_enough_unique_values():
+    globex = _globex_rows([_g(f"2025-01-{day:02d}", 930, day) for day in range(2, 14)])
+    macro = _macro_rows([_m(f"2025-01-{day:02d}", 59, -day) for day in range(2, 14)])
+    study = build_macro_delta_reversal(globex, macro)
+
+    summary = summarize_macro_delta_reversal(study)
+    deciles = summary.filter((pl.col("summary_type") == "decile") & (pl.col("predictor") == "rth_pre_macro"))
+
+    assert deciles.height == 10
+    assert deciles.select("predictor_decile").to_series().to_list() == list(range(1, 11))
+    assert deciles.select(pl.col("n_days").sum()).item() == 12
+    assert deciles.select(pl.col("mean_k359_delta").max()).item() < 0
