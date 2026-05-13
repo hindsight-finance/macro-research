@@ -28,8 +28,13 @@ MACRO_5S_REQUIRED_COLUMNS = {
 PREDICTORS = ["eth_only_pre350", "rth_only_pre350", "eth_rth_pre350"]
 TARGET_WINDOWS_5S = {
     "k350_00_09": (0, 1),
+    "k350_00_04": (0, 0),
+    "k350_05_09": (1, 1),
+    "k350_00_29": (0, 5),
+    "k350_00_59": (0, 11),
 }
-TARGET_WINDOWS = [*TARGET_WINDOWS_5S.keys()]
+TARGET_WINDOWS = [*TARGET_WINDOWS_5S.keys(), *[f"k350_bucket_{bucket}" for bucket in range(0, 12)]]
+ROBUST_TARGET_WINDOWS = [*TARGET_WINDOWS_5S.keys()]
 
 
 def _missing_columns(frame: pl.DataFrame, required: set[str]) -> list[str]:
@@ -84,9 +89,20 @@ def build_macro_1550_delta_impulse(globex_1m: pl.DataFrame, macro_5s: pl.DataFra
     eth = _aggregate_window(globex_1m, "session_minute_index", 0, 929, "eth_only_pre350")
     rth = _aggregate_window(globex_1m, "session_minute_index", 930, 1309, "rth_only_pre350")
     eth_rth = _aggregate_window(globex_1m, "session_minute_index", 0, 1309, "eth_rth_pre350")
-    target = _aggregate_target_window_5s(macro_5s, 0, 1, "k350_00_09")
+    out = None
+    for prefix, (start, end) in TARGET_WINDOWS_5S.items():
+        target = _aggregate_target_window_5s(macro_5s, start, end, prefix)
+        out = target if out is None else out.join(target, on="trade_date_et", how="full", coalesce=True)
+    for bucket in range(0, 12):
+        prefix = f"k350_bucket_{bucket}"
+        target = _aggregate_target_window_5s(macro_5s, bucket, bucket, prefix)
+        out = out.join(target, on="trade_date_et", how="full", coalesce=True)
+
+    if out is None:
+        out = pl.DataFrame({"trade_date_et": []}, schema={"trade_date_et": pl.Date})
+
     out = (
-        target.join(eth, on="trade_date_et", how="left")
+        out.join(eth, on="trade_date_et", how="left")
         .join(rth, on="trade_date_et", how="left")
         .join(eth_rth, on="trade_date_et", how="left")
         .rename({"trade_date_et": "date"})

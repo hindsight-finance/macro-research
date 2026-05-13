@@ -74,3 +74,40 @@ def test_write_macro_1550_delta_impulse_persists_outputs(tmp_path: Path):
     assert result == (output_path, summary_path)
     assert pl.read_parquet(output_path).height == 1
     assert pl.read_parquet(summary_path).height > 0
+
+
+def test_build_macro_1550_delta_impulse_aggregates_target_windows():
+    globex = _globex_rows([_g("2025-01-02", 930, 10, 20, 20)])
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 0, 1, 2, 2),
+            _s("2025-01-02", 1, -3, 6, 6),
+            _s("2025-01-02", 2, 5, 10, 10),
+            _s("2025-01-02", 3, -7, 14, 14),
+            _s("2025-01-02", 4, 9, 18, 18),
+            _s("2025-01-02", 5, -11, 22, 22),
+            _s("2025-01-02", 6, 13, 26, 26),
+            _s("2025-01-02", 7, -15, 30, 30),
+            _s("2025-01-02", 8, 17, 34, 34),
+            _s("2025-01-02", 9, -19, 38, 38),
+            _s("2025-01-02", 10, 21, 42, 42),
+            _s("2025-01-02", 11, -23, 46, 46),
+            _s("2025-01-02", 12, 999, 999, 999),
+        ]
+    )
+
+    out = build_macro_1550_delta_impulse(globex, macro_5s)
+    row = out.row(0, named=True)
+
+    assert row["k350_00_04_volume_delta"] == 1
+    assert row["k350_05_09_volume_delta"] == -3
+    assert row["k350_00_09_volume_delta"] == -2
+    assert row["k350_00_09_classified_size"] == 8
+    assert row["k350_00_09_total_size"] == 8
+    assert row["k350_00_09_delta_imbalance"] == pytest.approx(-2 / 8)
+    assert row["k350_00_09_sign"] == -1
+    assert row["k350_00_29_volume_delta"] == -6
+    assert row["k350_00_59_volume_delta"] == -12
+    assert row["k350_bucket_0_volume_delta"] == 1
+    assert row["k350_bucket_11_volume_delta"] == -23
+    assert "k350_bucket_12_volume_delta" not in out.columns
