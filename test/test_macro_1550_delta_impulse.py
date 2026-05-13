@@ -176,3 +176,51 @@ def test_build_macro_1550_delta_impulse_adds_signs_and_primary_relationships():
     assert day2["eth_only_pre350_has_signal"] is False
     assert day2["eth_only_pre350_opposes_k350_00_09"] is False
     assert day2["eth_only_pre350_same_as_k350_00_09"] is False
+
+
+def test_summarize_macro_1550_delta_impulse_adds_target_sign_rows():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 930, 10),
+            _g("2025-01-03", 930, -10),
+            _g("2025-01-04", 930, 0, 10, 10),
+        ]
+    )
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 0, -4),
+            _s("2025-01-02", 1, -6),
+            _s("2025-01-03", 0, -3),
+            _s("2025-01-03", 1, -7),
+            _s("2025-01-04", 0, 5),
+            _s("2025-01-04", 1, -5),
+        ]
+    )
+    study = build_macro_1550_delta_impulse(globex, macro_5s)
+
+    summary = summarize_macro_1550_delta_impulse(study)
+    row = summary.filter(
+        (pl.col("summary_type") == "target_sign")
+        & (pl.col("predictor") == "rth_only_pre350")
+        & (pl.col("target_window") == "k350_00_09")
+    ).row(0, named=True)
+
+    assert row["n_days"] == 3
+    assert row["n_signal_days"] == 2
+    assert row["opposite_count"] == 1
+    assert row["opposite_rate"] == pytest.approx(0.5)
+    assert row["same_count"] == 1
+    assert row["same_rate"] == pytest.approx(0.5)
+    assert row["zero_predictor_count"] == 1
+    assert row["zero_target_count"] == 1
+    assert row["mean_predictor_delta"] == pytest.approx(0.0)
+    assert row["median_predictor_delta"] == pytest.approx(0.0)
+    assert row["mean_target_delta"] == pytest.approx((-10 - 10 + 0) / 3)
+    assert row["median_target_delta"] == pytest.approx(-10)
+    assert row["mean_target_delta_when_predictor_positive"] == pytest.approx(-10)
+    assert row["mean_target_delta_when_predictor_negative"] == pytest.approx(-10)
+    assert row["median_target_delta_when_predictor_positive"] == pytest.approx(-10)
+    assert row["median_target_delta_when_predictor_negative"] == pytest.approx(-10)
+    assert row["target_p25_when_predictor_positive"] == pytest.approx(-10)
+    assert row["target_p75_when_predictor_positive"] == pytest.approx(-10)
+    assert row["pearson_corr_predictor_vs_target_delta"] is not None
