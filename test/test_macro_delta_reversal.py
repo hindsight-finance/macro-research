@@ -200,3 +200,22 @@ def test_summarize_macro_delta_reversal_adds_decile_rows_when_enough_unique_valu
     assert deciles.select("predictor_decile").to_series().to_list() == list(range(1, 11))
     assert deciles.select(pl.col("n_days").sum()).item() == 12
     assert deciles.select(pl.col("mean_k359_delta").max()).item() < 0
+
+
+def test_write_macro_delta_reversal_persists_study_and_summary(tmp_path: Path):
+    globex_path = tmp_path / "globex.parquet"
+    macro_path = tmp_path / "macro.parquet"
+    output_path = tmp_path / "nested" / "study.parquet"
+    summary_path = tmp_path / "nested" / "summary.parquet"
+
+    _globex_rows([_g("2025-01-02", 930, 10)]).write_parquet(globex_path)
+    _macro_rows([_m("2025-01-02", 59, -5)]).write_parquet(macro_path)
+
+    result = write_macro_delta_reversal(globex_path, macro_path, output_path, summary_path)
+
+    assert result == (output_path, summary_path)
+    study = pl.read_parquet(output_path)
+    summary = pl.read_parquet(summary_path)
+    assert study.height == 1
+    assert study.row(0, named=True)["rth_pre_macro_opposes_k359"] is True
+    assert summary.filter(pl.col("summary_type") == "sign").height == 6
