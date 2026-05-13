@@ -26,6 +26,11 @@ from features.macro_fvg_study import (
     run_macro_fvg_study,
     scan_fvg_outcomes_until_1559_close,
 )
+from features.macro_fvg_delta_dominance import (
+    enrich_fvg_events_with_delta_dominance,
+    load_macro_volume_delta_5s,
+    try_enrich_fvg_events_with_delta_dominance,
+)
 
 
 def make_bars(rows):
@@ -46,6 +51,100 @@ def make_utc_bars(rows):
         df = df.with_columns(pl.col("Volume").fill_null(0))
     df = df.with_columns(pl.col("datetime_utc").cast(pl.String).str.to_datetime(time_zone="UTC", strict=True))
     return df
+
+
+def make_delta_events_for_dominance():
+    return pl.DataFrame(
+        [
+            {
+                "date": datetime(2025, 1, 2).date(),
+                "fvg_side": "bullish",
+                "confirmed_at": datetime(2025, 1, 2, 15, 52, 10),
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": True,
+                "mfe_pct_to_1559": 0.010,
+                "mae_pct_to_1559": 0.002,
+            },
+            {
+                "date": datetime(2025, 1, 2).date(),
+                "fvg_side": "bearish",
+                "confirmed_at": datetime(2025, 1, 2, 15, 52, 15),
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
+                "mae_pct_to_1559": float("nan"),
+            },
+            {
+                "date": datetime(2025, 1, 2).date(),
+                "fvg_side": "bullish",
+                "confirmed_at": datetime(2025, 1, 2, 15, 52, 20),
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": False,
+                "successful_by_1559": False,
+                "mfe_pct_to_1559": float("nan"),
+                "mae_pct_to_1559": float("nan"),
+            },
+            {
+                "date": datetime(2025, 1, 2).date(),
+                "fvg_side": "bearish",
+                "confirmed_at": datetime(2025, 1, 2, 15, 52, 25),
+                "is_confirmable_by_1559": True,
+                "retraced_by_1559": True,
+                "successful_by_1559": True,
+                "mfe_pct_to_1559": 0.020,
+                "mae_pct_to_1559": 0.003,
+            },
+        ]
+    )
+
+
+def make_delta_5s_for_dominance():
+    return pl.DataFrame(
+        [
+            {
+                "trade_date_et": datetime(2025, 1, 2).date(),
+                "macro_bucket_index": 26,
+                "volume_delta": 20,
+                "delta_imbalance": 0.20,
+                "tick_delta": 2,
+                "classified_share": 0.90,
+                "total_size": 100,
+                "is_empty": False,
+            },
+            {
+                "trade_date_et": datetime(2025, 1, 2).date(),
+                "macro_bucket_index": 27,
+                "volume_delta": 30,
+                "delta_imbalance": 0.30,
+                "tick_delta": 3,
+                "classified_share": 0.85,
+                "total_size": 100,
+                "is_empty": False,
+            },
+            {
+                "trade_date_et": datetime(2025, 1, 2).date(),
+                "macro_bucket_index": 28,
+                "volume_delta": -40,
+                "delta_imbalance": -0.40,
+                "tick_delta": -4,
+                "classified_share": 0.95,
+                "total_size": 100,
+                "is_empty": False,
+            },
+            {
+                "trade_date_et": datetime(2025, 1, 2).date(),
+                "macro_bucket_index": 29,
+                "volume_delta": -60,
+                "delta_imbalance": -0.60,
+                "tick_delta": -6,
+                "classified_share": 0.80,
+                "total_size": 100,
+                "is_empty": False,
+            },
+        ]
+    )
 
 
 def test_detect_macro_fvg_derives_macro_window_from_datetime_utc():
@@ -1842,6 +1941,83 @@ def test_tracks_stage_1_outcomes_during_stage_2_window():
     assert not event["invalidated_in_stage_2"]
     assert event["held_through_stage_2"]
     assert not event["untouched_through_stage_2"]
+
+
+def test_enriches_fvg_events_with_confirmation_bucket_delta_dominance():
+    enriched = enrich_fvg_events_with_delta_dominance(
+        make_delta_events_for_dominance(),
+        make_delta_5s_for_dominance(),
+    )
+
+    first = enriched.row(0, named=True)
+    assert first["fvg_delta_bucket_index"] == 26
+    assert first["fvg_delta_volume_delta"] == 20
+    assert first["fvg_delta_imbalance"] == 0.20
+    assert first["fvg_delta_tick_delta"] == 2
+    assert first["fvg_delta_classified_share"] == 0.90
+    assert first["fvg_delta_total_size"] == 100
+    assert not first["fvg_delta_is_empty"]
+
+
+def test_delta_dominance_alignment_and_absolute_values_respect_fvg_side():
+    enriched = enrich_fvg_events_with_delta_dominance(
+        make_delta_events_for_dominance(),
+        make_delta_5s_for_dominance(),
+    )
+
+    rows = enriched.to_dicts()
+    assert rows[0]["fvg_side"] == "bullish"
+    assert rows[0]["aligned_delta_imbalance"] == pytest.approx(0.20)
+    assert rows[0]["abs_delta_imbalance"] == pytest.approx(0.20)
+    assert rows[0]["aligned_volume_delta"] == 20
+    assert rows[0]["abs_volume_delta"] == 20
+    assert rows[0]["aligned_tick_delta"] == 2
+    assert rows[0]["abs_tick_delta"] == 2
+
+    assert rows[1]["fvg_side"] == "bearish"
+    assert rows[1]["fvg_delta_imbalance"] == pytest.approx(0.30)
+    assert rows[1]["aligned_delta_imbalance"] == pytest.approx(-0.30)
+    assert rows[1]["abs_delta_imbalance"] == pytest.approx(0.30)
+    assert rows[1]["aligned_volume_delta"] == -30
+    assert rows[1]["abs_volume_delta"] == 30
+    assert rows[1]["aligned_tick_delta"] == -3
+    assert rows[1]["abs_tick_delta"] == 3
+
+    assert rows[3]["fvg_side"] == "bearish"
+    assert rows[3]["fvg_delta_imbalance"] == pytest.approx(-0.60)
+    assert rows[3]["aligned_delta_imbalance"] == pytest.approx(0.60)
+    assert rows[3]["abs_delta_imbalance"] == pytest.approx(0.60)
+
+
+def test_delta_dominance_quantiles_are_ranked_low_to_high():
+    enriched = enrich_fvg_events_with_delta_dominance(
+        make_delta_events_for_dominance(),
+        make_delta_5s_for_dominance(),
+    )
+
+    aligned_by_value = (
+        enriched.select("aligned_delta_imbalance", "aligned_delta_imbalance_quantile")
+        .sort("aligned_delta_imbalance")
+        .to_dicts()
+    )
+    assert [row["aligned_delta_imbalance_quantile"] for row in aligned_by_value] == [
+        "q1_lowest",
+        "q2",
+        "q3",
+        "q4_highest",
+    ]
+
+    abs_by_value = (
+        enriched.select("abs_delta_imbalance", "abs_delta_imbalance_quantile")
+        .sort("abs_delta_imbalance")
+        .to_dicts()
+    )
+    assert [row["abs_delta_imbalance_quantile"] for row in abs_by_value] == [
+        "q1_lowest",
+        "q2",
+        "q3",
+        "q4_highest",
+    ]
 
 
 def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
