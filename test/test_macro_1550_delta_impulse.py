@@ -233,7 +233,7 @@ def test_summarize_macro_1550_delta_impulse_adds_decile_and_tail_rows():
         day = f"2025-01-{i + 1:02d}"
         predictor_delta = i + 1 if i >= 10 else -(20 - i)
         target_delta = -predictor_delta
-        globex_rows.append(_g(day, 930, predictor_delta, abs(predictor_delta) * 2, abs(predictor_delta) * 2))
+        globex_rows.append(_g(day, 930, predictor_delta, abs(predictor_delta) + 20, abs(predictor_delta) + 20))
         macro_rows.append(_s(day, 0, target_delta, abs(target_delta) * 2, abs(target_delta) * 2))
         macro_rows.append(_s(day, 1, 0, 1, 1))
     study = build_macro_1550_delta_impulse(_globex_rows(globex_rows), _macro_5s_rows(macro_rows))
@@ -270,3 +270,32 @@ def test_summarize_macro_1550_delta_impulse_adds_decile_and_tail_rows():
     assert top_tail["median_target_delta"] < 0
     assert top_tail["target_p25"] is not None
     assert top_tail["target_p75"] is not None
+
+
+def test_summarize_macro_1550_delta_impulse_skips_deciles_when_predictor_has_too_few_unique_values():
+    globex_rows = []
+    macro_rows = []
+    for i in range(20):
+        day = f"2025-01-{i + 1:02d}"
+        predictor_delta = 10 if i < 10 else -10
+        target_delta = i + 1
+        globex_rows.append(_g(day, 930, predictor_delta, 20, 20))
+        macro_rows.append(_s(day, 0, target_delta, abs(target_delta) * 2, abs(target_delta) * 2))
+        macro_rows.append(_s(day, 1, 0, 1, 1))
+    study = build_macro_1550_delta_impulse(_globex_rows(globex_rows), _macro_5s_rows(macro_rows))
+
+    summary = summarize_macro_1550_delta_impulse(study)
+
+    raw_deciles = summary.filter(
+        (pl.col("summary_type") == "target_raw_decile")
+        & (pl.col("predictor") == "rth_only_pre350")
+        & (pl.col("target_window") == "k350_00_09")
+    )
+    imbalance_deciles = summary.filter(
+        (pl.col("summary_type") == "target_imbalance_decile")
+        & (pl.col("predictor") == "rth_only_pre350")
+        & (pl.col("target_window") == "k350_00_09")
+    )
+
+    assert raw_deciles.height == 0
+    assert imbalance_deciles.height == 0

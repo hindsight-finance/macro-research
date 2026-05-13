@@ -235,6 +235,8 @@ def _target_decile_rows(study: pl.DataFrame, predictor: str, target: str, value_
     non_null = study.filter(pl.col(value_col).is_not_null())
     if non_null.height < 10:
         return []
+    if non_null.select(pl.col(value_col).n_unique()).item() < 10:
+        return []
     deciled = non_null.with_columns(
         ((pl.col(value_col).rank(method="ordinal") - 1) * 10 / non_null.height)
         .floor()
