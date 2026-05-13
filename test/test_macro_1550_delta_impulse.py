@@ -111,3 +111,68 @@ def test_build_macro_1550_delta_impulse_aggregates_target_windows():
     assert row["k350_bucket_0_volume_delta"] == 1
     assert row["k350_bucket_11_volume_delta"] == -23
     assert "k350_bucket_12_volume_delta" not in out.columns
+
+
+def test_build_macro_1550_delta_impulse_aggregates_predictor_boundaries():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 0, 10, 20, 21),
+            _g("2025-01-02", 929, -3, 6, 7),
+            _g("2025-01-02", 930, 5, 10, 11),
+            _g("2025-01-02", 1309, 7, 14, 15),
+            _g("2025-01-02", 1310, 999, 999, 999),
+        ]
+    )
+    macro_5s = _macro_5s_rows([_s("2025-01-02", 0, -2), _s("2025-01-02", 1, -4)])
+
+    out = build_macro_1550_delta_impulse(globex, macro_5s)
+    row = out.row(0, named=True)
+
+    assert row["date"].isoformat() == "2025-01-02"
+    assert row["eth_only_pre350_volume_delta"] == 7
+    assert row["eth_only_pre350_classified_size"] == 26
+    assert row["eth_only_pre350_total_size"] == 28
+    assert row["eth_only_pre350_delta_imbalance"] == pytest.approx(7 / 26)
+    assert row["rth_only_pre350_volume_delta"] == 12
+    assert row["rth_only_pre350_classified_size"] == 24
+    assert row["rth_only_pre350_total_size"] == 26
+    assert row["eth_rth_pre350_volume_delta"] == 19
+    assert row["eth_rth_pre350_classified_size"] == 50
+    assert row["eth_rth_pre350_total_size"] == 54
+
+
+def test_build_macro_1550_delta_impulse_adds_signs_and_primary_relationships():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 0, 10),
+            _g("2025-01-02", 930, 5),
+            _g("2025-01-03", 0, -8),
+            _g("2025-01-03", 930, 0, 10, 10),
+        ]
+    )
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 0, -3),
+            _s("2025-01-02", 1, -7),
+            _s("2025-01-03", 0, 0, 12, 12),
+            _s("2025-01-03", 1, 0, 12, 12),
+        ]
+    )
+
+    out = build_macro_1550_delta_impulse(globex, macro_5s)
+    day1 = out.filter(pl.col("date") == pl.date(2025, 1, 2)).row(0, named=True)
+    day2 = out.filter(pl.col("date") == pl.date(2025, 1, 3)).row(0, named=True)
+
+    assert day1["eth_only_pre350_sign"] == 1
+    assert day1["rth_only_pre350_sign"] == 1
+    assert day1["eth_rth_pre350_sign"] == 1
+    assert day1["k350_00_09_sign"] == -1
+    assert day1["eth_only_pre350_has_signal"] is True
+    assert day1["eth_only_pre350_opposes_k350_00_09"] is True
+    assert day1["eth_only_pre350_same_as_k350_00_09"] is False
+
+    assert day2["rth_only_pre350_sign"] == 0
+    assert day2["k350_00_09_sign"] == 0
+    assert day2["eth_only_pre350_has_signal"] is False
+    assert day2["eth_only_pre350_opposes_k350_00_09"] is False
+    assert day2["eth_only_pre350_same_as_k350_00_09"] is False

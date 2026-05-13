@@ -84,6 +84,23 @@ def _add_signs(frame: pl.DataFrame) -> pl.DataFrame:
     return frame.with_columns([_sign_expr(f"{name}_volume_delta").alias(f"{name}_sign") for name in names])
 
 
+def _add_primary_relationships(frame: pl.DataFrame) -> pl.DataFrame:
+    relationship_exprs: list[pl.Expr] = []
+    target = "k350_00_09"
+    target_sign = pl.col(f"{target}_sign")
+    for predictor in PREDICTORS:
+        pred_sign = pl.col(f"{predictor}_sign")
+        has_signal = (pred_sign != 0) & (target_sign != 0)
+        relationship_exprs.extend(
+            [
+                has_signal.alias(f"{predictor}_has_signal"),
+                (has_signal & (pred_sign == -target_sign)).alias(f"{predictor}_opposes_{target}"),
+                (has_signal & (pred_sign == target_sign)).alias(f"{predictor}_same_as_{target}"),
+            ]
+        )
+    return frame.with_columns(relationship_exprs)
+
+
 def build_macro_1550_delta_impulse(globex_1m: pl.DataFrame, macro_5s: pl.DataFrame) -> pl.DataFrame:
     _validate_inputs(globex_1m, macro_5s)
     eth = _aggregate_window(globex_1m, "session_minute_index", 0, 929, "eth_only_pre350")
@@ -107,7 +124,9 @@ def build_macro_1550_delta_impulse(globex_1m: pl.DataFrame, macro_5s: pl.DataFra
         .join(eth_rth, on="trade_date_et", how="left")
         .rename({"trade_date_et": "date"})
     )
-    return _add_signs(out).sort("date")
+    out = _add_signs(out)
+    out = _add_primary_relationships(out)
+    return out.sort("date")
 
 
 def _rate(numer: int, denom: int) -> float | None:
