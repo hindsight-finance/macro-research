@@ -268,12 +268,151 @@ def build_macro_bucket_path(macro_5s: pl.DataFrame) -> pl.DataFrame:
     return _add_conviction_categories(out)
 
 
+def _rate(numer: int, denom: int) -> float | None:
+    return numer / denom if denom else None
+
+
+def _scalar(frame: pl.DataFrame, expr: pl.Expr) -> float | int | None:
+    if frame.is_empty():
+        return None
+    return frame.select(expr).item()
+
+
+def _sign_count(subset: pl.DataFrame, column: str, sign: int) -> int:
+    if sign > 0:
+        return subset.filter(pl.col(column) > 0).height
+    if sign < 0:
+        return subset.filter(pl.col(column) < 0).height
+    return subset.filter(pl.col(column) == 0).height
+
+
+def _base_summary_row(subset: pl.DataFrame, summary_type: str, candle: str, **labels: object) -> dict:
+    complete = subset.filter(pl.col("complete_candle"))
+    signal_30s = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("early_30s_sign") != 0))
+    signal_late30 = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("late_30s_sign") != 0))
+    signal_full = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("full_sign") != 0))
+    n_signal_30s = signal_30s.height
+    n_signal_late30 = signal_late30.height
+    n_signal_full = signal_full.height
+    continue_30s = complete.filter(pl.col("early_10s_continues_to_30s")).height
+    fade_30s = complete.filter(pl.col("early_10s_fades_to_30s")).height
+    continue_late30 = complete.filter(pl.col("early_10s_continues_to_late30")).height
+    fade_late30 = complete.filter(pl.col("early_10s_fades_to_late30")).height
+    continue_full = complete.filter(pl.col("early_10s_continues_to_full")).height
+    fade_full = complete.filter(pl.col("early_10s_fades_to_full")).height
+    early_pos = complete.filter(pl.col("early_10s_sign") > 0).height
+    early_neg = complete.filter(pl.col("early_10s_sign") < 0).height
+    early_zero = complete.filter(pl.col("early_10s_sign") == 0).height
+    full_pos = complete.filter(pl.col("full_sign") > 0).height
+    full_neg = complete.filter(pl.col("full_sign") < 0).height
+    full_zero = complete.filter(pl.col("full_sign") == 0).height
+    n_complete = complete.height
+    row = {
+        "summary_type": summary_type,
+        "candle": candle,
+        "n_days": subset.height,
+        "n_complete_days": n_complete,
+        "n_signal_days": n_signal_full,
+        "n_signal_30s_days": n_signal_30s,
+        "n_signal_late30_days": n_signal_late30,
+        "n_signal_full_days": n_signal_full,
+        "early_10s_positive_count": early_pos,
+        "early_10s_negative_count": early_neg,
+        "early_10s_zero_count": early_zero,
+        "early_10s_positive_rate": _rate(early_pos, n_complete),
+        "early_10s_negative_rate": _rate(early_neg, n_complete),
+        "early_10s_zero_rate": _rate(early_zero, n_complete),
+        "full_positive_count": full_pos,
+        "full_negative_count": full_neg,
+        "full_zero_count": full_zero,
+        "full_positive_rate": _rate(full_pos, n_complete),
+        "full_negative_rate": _rate(full_neg, n_complete),
+        "full_zero_rate": _rate(full_zero, n_complete),
+        "continue_to_30s_count": continue_30s,
+        "continue_to_30s_rate": _rate(continue_30s, n_signal_30s),
+        "fade_to_30s_count": fade_30s,
+        "fade_to_30s_rate": _rate(fade_30s, n_signal_30s),
+        "continue_to_late30_count": continue_late30,
+        "continue_to_late30_rate": _rate(continue_late30, n_signal_late30),
+        "fade_to_late30_count": fade_late30,
+        "fade_to_late30_rate": _rate(fade_late30, n_signal_late30),
+        "continue_to_full_count": continue_full,
+        "continue_to_full_rate": _rate(continue_full, n_signal_full),
+        "fade_to_full_count": fade_full,
+        "fade_to_full_rate": _rate(fade_full, n_signal_full),
+        "mean_early_10s_delta": _scalar(complete, pl.col("early_10s_volume_delta").mean()),
+        "median_early_10s_delta": _scalar(complete, pl.col("early_10s_volume_delta").median()),
+        "mean_late_30s_delta": _scalar(complete, pl.col("late_30s_volume_delta").mean()),
+        "median_late_30s_delta": _scalar(complete, pl.col("late_30s_volume_delta").median()),
+        "mean_full_delta": _scalar(complete, pl.col("full_volume_delta").mean()),
+        "median_full_delta": _scalar(complete, pl.col("full_volume_delta").median()),
+        "full_p25": _scalar(complete, pl.col("full_volume_delta").quantile(0.25)),
+        "full_p75": _scalar(complete, pl.col("full_volume_delta").quantile(0.75)),
+        "mean_path_efficiency": _scalar(complete, pl.col("path_efficiency").mean()),
+        "median_path_efficiency": _scalar(complete, pl.col("path_efficiency").median()),
+        "mean_early_10s_abs_flow_share": _scalar(complete, pl.col("early_10s_abs_flow_share").mean()),
+        "median_early_10s_abs_flow_share": _scalar(complete, pl.col("early_10s_abs_flow_share").median()),
+        "mean_cum_sign_flip_count": _scalar(complete, pl.col("cum_sign_flip_count").mean()),
+        "median_cum_sign_flip_count": _scalar(complete, pl.col("cum_sign_flip_count").median()),
+    }
+    row.update(labels)
+    return row
+
+
+def _normalize_summary_rows(rows: list[dict]) -> list[dict]:
+    keys = sorted({key for row in rows for key in row})
+    return [{key: row.get(key) for key in keys} for row in rows]
+
+
 def summarize_macro_bucket_path(study: pl.DataFrame) -> pl.DataFrame:
-    rows = []
+    rows: list[dict] = []
     for candle in sorted(study["candle"].unique().to_list()):
-        subset = study.filter(pl.col("candle") == candle)
-        rows.append({"summary_type": "candle_baseline", "candle": candle, "n_days": subset.height})
-    return pl.DataFrame(rows, infer_schema_length=None)
+        candle_df = study.filter(pl.col("candle") == candle)
+        rows.append(_base_summary_row(candle_df, "candle_baseline", candle))
+        for category in ["strong_negative", "weak_negative", "neutral", "weak_positive", "strong_positive"]:
+            rows.append(
+                _base_summary_row(
+                    candle_df.filter(pl.col("early_10s_category") == category),
+                    "early_10s_category",
+                    candle,
+                    early_10s_category=category,
+                )
+            )
+        for category in ["low_abs_conviction", "mid_abs_conviction", "high_abs_conviction"]:
+            rows.append(
+                _base_summary_row(
+                    candle_df.filter(pl.col("early_10s_abs_category") == category),
+                    "early_10s_abs_category",
+                    candle,
+                    early_10s_abs_category=category,
+                )
+            )
+        for decile in range(1, 11):
+            rows.append(
+                _base_summary_row(
+                    candle_df.filter(pl.col("early_10s_raw_decile") == decile),
+                    "early_10s_raw_decile",
+                    candle,
+                    early_10s_raw_decile=decile,
+                )
+            )
+            rows.append(
+                _base_summary_row(
+                    candle_df.filter(pl.col("early_10s_imbalance_decile") == decile),
+                    "early_10s_imbalance_decile",
+                    candle,
+                    early_10s_imbalance_decile=decile,
+                )
+            )
+            rows.append(
+                _base_summary_row(
+                    candle_df.filter(pl.col("early_10s_abs_decile") == decile),
+                    "early_10s_abs_decile",
+                    candle,
+                    early_10s_abs_decile=decile,
+                )
+            )
+    return pl.DataFrame(_normalize_summary_rows(rows), infer_schema_length=None)
 
 
 def load_macro_5s_input(path: str | Path = MACRO_5S_INPUT_PATH) -> pl.DataFrame:

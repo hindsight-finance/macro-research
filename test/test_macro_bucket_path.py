@@ -186,3 +186,66 @@ def test_build_macro_bucket_path_deciles_ignore_nulls_and_keep_null_rows_null():
     null_row = out.filter(pl.col("date") == pl.date(2025, 4, 20)).row(0, named=True)
     assert null_row["early_10s_raw_decile"] is None
     assert set(out.filter(pl.col("date") != pl.date(2025, 4, 20))["early_10s_raw_decile"].to_list()) == set(range(1, 11))
+
+
+def test_build_macro_bucket_path_aggregates_duplicate_bucket_rows_before_pivot():
+    rows = _complete_candle("2025-05-01", 0, [1] * 12)
+    rows.append(_s("2025-05-01", 0, 4, 6, 7))
+
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+    row = out.row(0, named=True)
+
+    assert out.height == 1
+    assert row["bucket_count"] == 12
+    assert row["b0_volume_delta"] == 5
+    assert row["b0_classified_size"] == 17
+    assert row["b0_total_size"] == 19
+
+
+def test_summarize_macro_bucket_path_adds_expected_summary_types_and_target_denominators():
+    rows = []
+    for i in range(20):
+        day = f"2025-03-{i + 1:02d}"
+        early = i - 10
+        rest = 20 if early > 0 else -20
+        rows += _complete_candle(day, 0, [early, 0, 1, -1, 2, -2, rest, 0, 0, 0, 0, 0])
+        rows += _complete_candle(day, 108, [-early, 0, 1, -1, 2, -2, -rest, 0, 0, 0, 0, 0])
+    study = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    summary = summarize_macro_bucket_path(study)
+
+    assert {"candle_baseline", "early_10s_category", "early_10s_raw_decile", "early_10s_imbalance_decile", "early_10s_abs_decile", "early_10s_abs_category"}.issubset(
+        set(summary["summary_type"].to_list())
+    )
+    baseline = summary.filter((pl.col("summary_type") == "candle_baseline") & (pl.col("candle") == "k350")).row(0, named=True)
+    assert baseline["n_days"] == 20
+    assert baseline["n_complete_days"] == 20
+    assert baseline["n_signal_days"] == baseline["n_signal_full_days"]
+    assert baseline["n_signal_30s_days"] is not None
+    assert baseline["n_signal_late30_days"] is not None
+    assert baseline["early_10s_positive_count"] > 0
+    assert baseline["full_negative_rate"] is not None
+    assert baseline["median_full_delta"] is not None
+    cat = summary.filter(
+        (pl.col("summary_type") == "early_10s_category")
+        & (pl.col("candle") == "k350")
+        & (pl.col("early_10s_category") == "strong_positive")
+    ).row(0, named=True)
+    assert cat["n_days"] > 0
+    assert cat["continue_to_full_rate"] is not None
+    assert cat["median_late_30s_delta"] is not None
+    assert cat["median_path_efficiency"] is not None
+
+
+def test_summarize_macro_bucket_path_filters_rates_to_complete_candles():
+    rows = _complete_candle("2025-06-01", 0, [5, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 0])
+    rows += [_s("2025-06-02", 0, 5), _s("2025-06-02", 1, 0)]
+    study = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    summary = summarize_macro_bucket_path(study)
+    baseline = summary.filter((pl.col("summary_type") == "candle_baseline") & (pl.col("candle") == "k350")).row(0, named=True)
+
+    assert baseline["n_days"] == 2
+    assert baseline["n_complete_days"] == 1
+    assert baseline["n_signal_full_days"] == 1
+    assert baseline["continue_to_full_rate"] == 1.0
