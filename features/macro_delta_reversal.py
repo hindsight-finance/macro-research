@@ -381,6 +381,99 @@ def _target_pair_sign_row(study: pl.DataFrame, predictor: str, target: str) -> d
     }
 
 
+def _base_target_summary_row(
+    study: pl.DataFrame,
+    predictor: str,
+    target: str,
+    summary_type: str,
+    subset: pl.DataFrame,
+    predictor_decile: int | None = None,
+    tail: str | None = None,
+    condition: str | None = None,
+) -> dict:
+    pred_sign = pl.col(f"{predictor}_sign")
+    target_sign = pl.col(f"{target}_sign")
+    signal = subset.filter((pred_sign != 0) & (target_sign != 0))
+    n_signal_days = signal.height
+    opposite_count = subset.filter((pred_sign != 0) & (target_sign != 0) & (pred_sign == -target_sign)).height
+    same_count = subset.filter((pred_sign != 0) & (target_sign != 0) & (pred_sign == target_sign)).height
+    return {
+        "summary_type": summary_type,
+        "predictor": predictor,
+        "target_window": target,
+        "predictor_decile": predictor_decile,
+        "tail": tail,
+        "condition": condition,
+        "n_days": subset.height,
+        "n_signal_days": n_signal_days,
+        "opposite_count": opposite_count,
+        "opposite_rate": _rate(opposite_count, n_signal_days),
+        "same_count": same_count,
+        "same_rate": _rate(same_count, n_signal_days),
+        "zero_predictor_count": subset.filter(pred_sign == 0).height,
+        "zero_target_count": subset.filter(target_sign == 0).height,
+        "mean_predictor_delta": subset.select(pl.col(f"{predictor}_volume_delta").mean()).item() if subset.height else None,
+        "median_predictor_delta": subset.select(pl.col(f"{predictor}_volume_delta").median()).item() if subset.height else None,
+        "mean_target_delta": subset.select(pl.col(f"{target}_volume_delta").mean()).item() if subset.height else None,
+        "median_target_delta": subset.select(pl.col(f"{target}_volume_delta").median()).item() if subset.height else None,
+        "target_p25": subset.select(pl.col(f"{target}_volume_delta").quantile(0.25)).item() if subset.height else None,
+        "target_p75": subset.select(pl.col(f"{target}_volume_delta").quantile(0.75)).item() if subset.height else None,
+        "pearson_corr_predictor_vs_target_delta": subset.select(
+            pl.corr(f"{predictor}_volume_delta", f"{target}_volume_delta")
+        ).item()
+        if subset.height
+        else None,
+    }
+
+
+def _target_decile_rows(study: pl.DataFrame, predictor: str, target: str, value_suffix: str, summary_type: str) -> list[dict]:
+    value_col = f"{predictor}_{value_suffix}"
+    non_null = study.filter(pl.col(value_col).is_not_null())
+    if non_null.height < 10:
+        return []
+    deciled = non_null.with_columns(
+        ((pl.col(value_col).rank(method="ordinal") - 1) * 10 / non_null.height)
+        .floor()
+        .cast(pl.Int64)
+        .clip(0, 9)
+        .add(1)
+        .alias("predictor_decile")
+    )
+    return [
+        _base_target_summary_row(
+            study,
+            predictor,
+            target,
+            summary_type,
+            deciled.filter(pl.col("predictor_decile") == decile),
+            predictor_decile=decile,
+        )
+        for decile in range(1, 11)
+    ]
+
+
+def _target_tail_rows(study: pl.DataFrame, predictor: str, target: str) -> list[dict]:
+    value_col = f"{predictor}_volume_delta"
+    rows = []
+    empty_subset = study.head(0)
+    positive = study.filter(pl.col(value_col) > 0)
+    negative = study.filter(pl.col(value_col) < 0)
+    tail_specs = [
+        ("positive_top_20", positive, 0.80, ">="),
+        ("positive_top_10", positive, 0.90, ">="),
+        ("negative_bottom_20", negative, 0.20, "<="),
+        ("negative_bottom_10", negative, 0.10, "<="),
+    ]
+    for label, frame, quantile, op in tail_specs:
+        if frame.is_empty():
+            subset = empty_subset
+        else:
+            threshold = frame.select(pl.col(value_col).quantile(quantile)).item()
+            subset = frame.filter(pl.col(value_col) >= threshold) if op == ">=" else frame.filter(pl.col(value_col) <= threshold)
+        rows.append(_base_target_summary_row(study, predictor, target, "target_tail", subset, tail=label))
+    return rows
+
+
 def _normalize_summary_rows(rows: list[dict]) -> list[dict]:
     keys = sorted({key for row in rows for key in row})
     return [{key: row.get(key) for key in keys} for row in rows]
@@ -423,7 +516,10 @@ def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
     for predictor in PRIMARY_PREDICTORS:
         for target in _available_target_windows(study):
             rows.append(_target_pair_sign_row(study, predictor, target))
-    return pl.DataFrame(_normalize_summary_rows(rows))
+            rows.extend(_target_decile_rows(study, predictor, target, "volume_delta", "target_raw_decile"))
+            rows.extend(_target_decile_rows(study, predictor, target, "delta_imbalance", "target_imbalance_decile"))
+            rows.extend(_target_tail_rows(study, predictor, target))
+    return pl.DataFrame(_normalize_summary_rows(rows), infer_schema_length=None)
 
 
 def load_volume_delta_inputs(

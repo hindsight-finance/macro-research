@@ -334,6 +334,57 @@ def test_summarize_macro_delta_reversal_adds_decile_rows_when_enough_unique_valu
     assert deciles.select(pl.col("mean_k359_delta").max()).item() < 0
 
 
+def test_summarize_macro_delta_reversal_adds_raw_and_imbalance_decile_rows():
+    globex = _globex_rows([_g(f"2025-01-{day:02d}", 930, day, day * 10, day * 10) for day in range(2, 14)])
+    macro = _macro_rows([_m(f"2025-01-{day:02d}", 59, -day, day * 2, day * 2) for day in range(2, 14)])
+    macro_5s = _macro_5s_rows([_s(f"2025-01-{day:02d}", 118, -day, day * 2, day * 2) for day in range(2, 14)])
+    study = build_macro_delta_reversal(globex, macro, macro_5s)
+
+    summary = summarize_macro_delta_reversal(study)
+    raw = summary.filter(
+        (pl.col("summary_type") == "target_raw_decile")
+        & (pl.col("predictor") == "rth_macro_pre59")
+        & (pl.col("target_window") == "k359_50_59")
+    )
+    imb = summary.filter(
+        (pl.col("summary_type") == "target_imbalance_decile")
+        & (pl.col("predictor") == "rth_macro_pre59")
+        & (pl.col("target_window") == "k359_50_59")
+    )
+
+    assert raw.height == 10
+    assert raw.select("predictor_decile").to_series().to_list() == list(range(1, 11))
+    assert raw.select(pl.col("n_days").sum()).item() == 12
+    assert raw.select(pl.col("median_target_delta").max()).item() < 0
+    assert imb.height == 10
+    assert imb.select(pl.col("n_days").sum()).item() == 12
+
+
+def test_summarize_macro_delta_reversal_adds_positive_and_negative_tail_rows():
+    globex = _globex_rows([_g(f"2025-01-{day:02d}", 930, day) for day in range(2, 32)])
+    macro = _macro_rows([_m(f"2025-01-{day:02d}", 59, -day) for day in range(2, 32)])
+    macro_5s = _macro_5s_rows([_s(f"2025-01-{day:02d}", 118, -day) for day in range(2, 32)])
+    study = build_macro_delta_reversal(globex, macro, macro_5s)
+
+    summary = summarize_macro_delta_reversal(study)
+    tails = summary.filter(
+        (pl.col("summary_type") == "target_tail")
+        & (pl.col("predictor") == "rth_macro_pre59")
+        & (pl.col("target_window") == "k359_50_59")
+    )
+
+    assert set(tails.select("tail").to_series().to_list()) == {
+        "positive_top_20",
+        "positive_top_10",
+        "negative_bottom_20",
+        "negative_bottom_10",
+    }
+    positive_top_20 = tails.filter(pl.col("tail") == "positive_top_20").row(0, named=True)
+    assert positive_top_20["n_days"] >= 5
+    assert positive_top_20["opposite_rate"] == pytest.approx(1.0)
+    assert positive_top_20["median_target_delta"] < 0
+
+
 def test_write_macro_delta_reversal_persists_study_and_summary(tmp_path: Path):
     globex_path = tmp_path / "globex.parquet"
     macro_path = tmp_path / "macro.parquet"
