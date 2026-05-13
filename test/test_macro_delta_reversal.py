@@ -58,3 +58,48 @@ def test_build_macro_delta_reversal_requires_macro_schema():
 
     with pytest.raises(ValueError, match="Missing macro volume-delta columns"):
         build_macro_delta_reversal(globex, macro)
+
+
+def test_build_macro_delta_reversal_aggregates_core_windows_and_target():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 0, 10, 20, 25),
+            _g("2025-01-02", 929, -3, 10, 11),
+            _g("2025-01-02", 930, 7, 14, 14),
+            _g("2025-01-02", 1309, 5, 10, 13),
+            _g("2025-01-02", 1310, 99, 99, 99),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 50, -4, 8, 9),
+            _m("2025-01-02", 58, -2, 6, 6),
+            _m("2025-01-02", 59, -9, 18, 20),
+        ]
+    )
+
+    out = build_macro_delta_reversal(globex, macro)
+
+    assert out.height == 1
+    row = out.row(0, named=True)
+    assert row["date"].isoformat() == "2025-01-02"
+    assert row["eth_pre_rth_volume_delta"] == 7
+    assert row["eth_pre_rth_classified_size"] == 30
+    assert row["eth_pre_rth_total_size"] == 36
+    assert row["eth_pre_rth_delta_imbalance"] == pytest.approx(7 / 30)
+    assert row["rth_pre_macro_volume_delta"] == 12
+    assert row["rth_pre_macro_classified_size"] == 24
+    assert row["rth_pre_macro_total_size"] == 27
+    assert row["day_pre_macro_volume_delta"] == 19
+    assert row["day_pre_macro_classified_size"] == 54
+    assert row["macro_pre59_volume_delta"] == -6
+    assert row["macro_pre59_classified_size"] == 14
+    assert row["macro_pre59_total_size"] == 15
+    assert row["rth_plus_macro_pre59_volume_delta"] == 6
+    assert row["rth_plus_macro_pre59_classified_size"] == 38
+    assert row["day_plus_macro_pre59_volume_delta"] == 13
+    assert row["day_plus_macro_pre59_classified_size"] == 68
+    assert row["k359_volume_delta"] == -9
+    assert row["k359_classified_size"] == 18
+    assert row["k359_total_size"] == 20
+    assert row["k359_delta_imbalance"] == pytest.approx(-9 / 18)

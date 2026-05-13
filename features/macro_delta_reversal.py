@@ -48,9 +48,81 @@ def _validate_inputs(globex_1m: pl.DataFrame, macro_1m: pl.DataFrame) -> None:
         raise ValueError(f"Missing macro volume-delta columns: {macro_missing}")
 
 
+def _safe_ratio_expr(numerator: pl.Expr, denominator: pl.Expr) -> pl.Expr:
+    return pl.when(denominator != 0).then(numerator / denominator).otherwise(None)
+
+
+def _aggregate_window(frame: pl.DataFrame, index_col: str, start: int, end: int, prefix: str) -> pl.DataFrame:
+    return (
+        frame.filter(pl.col(index_col).is_between(start, end))
+        .group_by("trade_date_et")
+        .agg(
+            pl.col("volume_delta").sum().alias(f"{prefix}_volume_delta"),
+            pl.col("classified_size").sum().alias(f"{prefix}_classified_size"),
+            pl.col("total_size").sum().alias(f"{prefix}_total_size"),
+        )
+        .with_columns(
+            _safe_ratio_expr(
+                pl.col(f"{prefix}_volume_delta"),
+                pl.col(f"{prefix}_classified_size"),
+            ).alias(f"{prefix}_delta_imbalance")
+        )
+    )
+
+
+def _extract_k359(macro_1m: pl.DataFrame) -> pl.DataFrame:
+    return (
+        macro_1m.filter(pl.col("macro_minute_index") == 59)
+        .group_by("trade_date_et")
+        .agg(
+            pl.col("volume_delta").sum().alias("k359_volume_delta"),
+            pl.col("classified_size").sum().alias("k359_classified_size"),
+            pl.col("total_size").sum().alias("k359_total_size"),
+        )
+        .with_columns(
+            _safe_ratio_expr(pl.col("k359_volume_delta"), pl.col("k359_classified_size")).alias(
+                "k359_delta_imbalance"
+            )
+        )
+    )
+
+
+def _add_combined_window(frame: pl.DataFrame, left: str, right: str, output: str) -> pl.DataFrame:
+    return frame.with_columns(
+        (pl.col(f"{left}_volume_delta").fill_null(0) + pl.col(f"{right}_volume_delta").fill_null(0)).alias(
+            f"{output}_volume_delta"
+        ),
+        (pl.col(f"{left}_classified_size").fill_null(0) + pl.col(f"{right}_classified_size").fill_null(0)).alias(
+            f"{output}_classified_size"
+        ),
+        (pl.col(f"{left}_total_size").fill_null(0) + pl.col(f"{right}_total_size").fill_null(0)).alias(
+            f"{output}_total_size"
+        ),
+    ).with_columns(
+        _safe_ratio_expr(pl.col(f"{output}_volume_delta"), pl.col(f"{output}_classified_size")).alias(
+            f"{output}_delta_imbalance"
+        )
+    )
+
+
 def build_macro_delta_reversal(globex_1m: pl.DataFrame, macro_1m: pl.DataFrame) -> pl.DataFrame:
     _validate_inputs(globex_1m, macro_1m)
-    return pl.DataFrame()
+
+    target = _extract_k359(macro_1m)
+    eth = _aggregate_window(globex_1m, "session_minute_index", 0, 929, "eth_pre_rth")
+    rth = _aggregate_window(globex_1m, "session_minute_index", 930, 1309, "rth_pre_macro")
+    day = _aggregate_window(globex_1m, "session_minute_index", 0, 1309, "day_pre_macro")
+    macro_pre59 = _aggregate_window(macro_1m, "macro_minute_index", 50, 58, "macro_pre59")
+
+    out = (
+        target.join(eth, on="trade_date_et", how="left")
+        .join(rth, on="trade_date_et", how="left")
+        .join(day, on="trade_date_et", how="left")
+        .join(macro_pre59, on="trade_date_et", how="left")
+    )
+    out = _add_combined_window(out, "rth_pre_macro", "macro_pre59", "rth_plus_macro_pre59")
+    out = _add_combined_window(out, "day_pre_macro", "macro_pre59", "day_plus_macro_pre59")
+    return out.rename({"trade_date_et": "date"}).sort("date")
 
 
 def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
