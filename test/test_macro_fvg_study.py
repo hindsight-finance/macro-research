@@ -147,6 +147,32 @@ def make_delta_5s_for_dominance():
     )
 
 
+def make_delta_profile_events_for_excursion():
+    return enrich_fvg_events_with_delta_dominance(
+        make_delta_events_for_dominance(),
+        make_delta_5s_for_dominance(),
+    ).with_columns(
+        pl.lit("stage_1").alias("assigned_stage"),
+        pl.Series("assigned_minute_index", [0, 0, 5, 5]),
+        pl.Series("assigned_minute_hhmm", ["15:50", "15:50", "15:55", "15:55"]),
+        pl.lit(100).alias("bar2_volume"),
+        pl.lit("3_aligned").alias("alignment_bucket"),
+        pl.Series("minute_block", ["15:50-15:52", "15:50-15:52", "15:53-15:57", "15:53-15:57"]),
+        pl.lit(">=2.25").alias("gap_size_bucket_225"),
+        pl.Series("entry_triggered_by_1559", [True, True, True, True]),
+        pl.Series("mfe_pct_to_1559", [0.010, 0.020, 0.030, 0.020]),
+        pl.Series("mae_pct_to_1559", [0.002, 0.003, 0.004, 0.003]),
+        pl.lit(True).alias("held_to_1559_close"),
+        pl.lit(False).alias("invalidated_by_1559"),
+        pl.lit(False).alias("untouched_to_1559_close"),
+        pl.lit(False).alias("retraced_in_stage_2"),
+        pl.lit(False).alias("invalidated_in_stage_2"),
+        pl.lit(True).alias("held_through_stage_2"),
+        pl.lit(False).alias("untouched_through_stage_2"),
+        pl.lit(False).alias("stacked_continuation_fvg"),
+    )
+
+
 def test_detect_macro_fvg_derives_macro_window_from_datetime_utc():
     bars = make_utc_bars(
         [
@@ -2183,6 +2209,63 @@ def test_build_summary_tables_includes_delta_dominance_by_minute_block():
     assert row["n_retraced"] == 1
     assert row["n_successful"] == 1
     assert row["successful_share_of_confirmable"] == 1.0
+
+
+def test_build_summary_tables_includes_delta_mae_mfe_entry_excursion_profiles():
+    summary = macro_fvg_study.build_summary_tables(make_delta_profile_events_for_excursion())
+    scopes = set(summary["summary_scope"].to_list())
+
+    assert "entry_excursion_abs_delta_imbalance_quantile" in scopes
+    assert "entry_excursion_minute_block_abs_delta_imbalance_quantile" in scopes
+    assert "entry_excursion_creation_minute_abs_delta_imbalance_quantile" in scopes
+
+    abs_row = filter_one(
+        summary,
+        (pl.col("summary_scope") == "entry_excursion_abs_delta_imbalance_quantile")
+        & (pl.col("abs_delta_imbalance_quantile") == "q4_highest"),
+    )
+    assert abs_row["n_confirmable"] == 1
+    assert abs_row["n_triggered"] == 1
+    assert abs_row["entry_trigger_rate"] == 1.0
+    assert abs_row["mfe_pct_mean"] == pytest.approx(0.020)
+    assert abs_row["mae_pct_mean"] == pytest.approx(0.003)
+
+    block_row = filter_one(
+        summary,
+        (pl.col("summary_scope") == "entry_excursion_minute_block_abs_delta_imbalance_quantile")
+        & (pl.col("minute_block") == "15:53-15:57")
+        & (pl.col("abs_delta_imbalance_quantile") == "q3"),
+    )
+    assert block_row["n_triggered"] == 1
+    assert block_row["mfe_pct_mean"] == pytest.approx(0.030)
+    assert block_row["mae_pct_mean"] == pytest.approx(0.004)
+
+
+def test_export_delta_dominance_mae_mfe_profiles_writes_useful_csvs_and_figures(tmp_path):
+    events = make_delta_profile_events_for_excursion()
+    summary = macro_fvg_study.build_summary_tables(events)
+
+    macro_fvg_study.export_delta_dominance_mae_mfe_profiles(summary, tmp_path)
+
+    expected_files = [
+        "delta_dominance_mae_mfe_abs_quantile.csv",
+        "delta_dominance_mae_mfe_by_block.csv",
+        "delta_dominance_mae_mfe_by_creation_minute.csv",
+        "delta_abs_quantile_mfe_mae_profile.png",
+        "early_block_abs_delta_mfe_mae_profile.png",
+    ]
+    for filename in expected_files:
+        assert (tmp_path / filename).exists(), filename
+
+    csv = pl.read_csv(tmp_path / "delta_dominance_mae_mfe_abs_quantile.csv")
+    assert {
+        "profile_type",
+        "summary_scope",
+        "abs_delta_imbalance_quantile",
+        "mfe_pct_mean",
+        "mae_pct_mean",
+    }.issubset(csv.columns)
+    assert set(csv["profile_type"].to_list()) == {"entry_triggered", "successful_only"}
 
 
 def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):

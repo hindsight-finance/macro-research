@@ -644,6 +644,33 @@ def build_entry_excursion_alignment_bucket_minute_block_summary(events: pl.DataF
     return _group_entry_excursion_stats(events, ["alignment_bucket", "minute_block"], "entry_excursion_alignment_bucket_minute_block")
 
 
+def build_entry_excursion_abs_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "abs_delta_imbalance_quantile"
+    return _group_entry_excursion_stats(
+        _filter_non_null(events, column),
+        [column],
+        "entry_excursion_abs_delta_imbalance_quantile",
+    )
+
+
+def build_entry_excursion_minute_block_abs_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "abs_delta_imbalance_quantile"
+    return _group_entry_excursion_stats(
+        _filter_non_null(events, column),
+        ["minute_block", column],
+        "entry_excursion_minute_block_abs_delta_imbalance_quantile",
+    )
+
+
+def build_entry_excursion_creation_minute_abs_delta_imbalance_quantile_summary(events: pl.DataFrame) -> pl.DataFrame:
+    column = "abs_delta_imbalance_quantile"
+    return _group_entry_excursion_stats(
+        _filter_non_null(events, column),
+        ["assigned_minute_index", "assigned_minute_hhmm", column],
+        "entry_excursion_creation_minute_abs_delta_imbalance_quantile",
+    )
+
+
 def build_success_context_summary(events: pl.DataFrame) -> pl.DataFrame:
     return _group_success_context_stats(events, [], "success_context_overall")
 
@@ -755,6 +782,9 @@ def build_summary_tables(events: pl.DataFrame) -> pl.DataFrame:
         build_alignment_bucket_summary(events), build_alignment_bucket_minute_block_summary(events), build_alignment_bucket_gap_bucket_summary(events),
         build_entry_excursion_summary(events), build_entry_excursion_alignment_bucket_summary(events), build_entry_excursion_minute_block_summary(events),
         build_entry_excursion_gap_bucket_summary(events), build_entry_excursion_alignment_bucket_minute_block_summary(events),
+        build_entry_excursion_abs_delta_imbalance_quantile_summary(events),
+        build_entry_excursion_minute_block_abs_delta_imbalance_quantile_summary(events),
+        build_entry_excursion_creation_minute_abs_delta_imbalance_quantile_summary(events),
         build_success_context_summary(events), build_success_context_alignment_bucket_summary(events), build_success_context_stacked_flag_summary(events),
         build_success_context_alignment_bucket_stacked_flag_summary(events),
         build_success_context_aligned_delta_imbalance_quantile_summary(events),
@@ -969,6 +999,155 @@ def _stacked_count_plot(records: list[dict], x_col: str, bucket_col: str, bucket
     ax.set_title(title); ax.set_ylabel("Count"); ax.legend(loc="upper right"); fig.tight_layout(); fig.savefig(path); plt.close(fig)
 
 
+PROFILE_EXPORT_COLUMNS = [
+    "profile_type",
+    "summary_scope",
+    "minute_block",
+    "assigned_minute_index",
+    "assigned_minute_hhmm",
+    "abs_delta_imbalance_quantile",
+    "n_confirmable",
+    "n_triggered",
+    "n_retraced",
+    "n_successful",
+    "entry_trigger_rate",
+    "retrace_rate",
+    "success_after_retrace_rate",
+    "successful_share_of_confirmable",
+    "mfe_pct_mean",
+    "mfe_pct_median",
+    "mfe_pct_p75",
+    "mfe_pct_p90",
+    "mae_pct_mean",
+    "mae_pct_median",
+    "mae_pct_p75",
+    "mae_pct_p90",
+]
+
+
+def _profile_scope(summary: pl.DataFrame, scope: str, profile_type: str) -> pl.DataFrame:
+    frame = _summary_scope(summary, scope)
+    if frame.is_empty():
+        return pl.DataFrame({column: [] for column in PROFILE_EXPORT_COLUMNS})
+    frame = frame.with_columns(pl.lit(profile_type).alias("profile_type"))
+    return frame.select(
+        [
+            pl.col(column) if column in frame.columns else pl.lit(None).alias(column)
+            for column in PROFILE_EXPORT_COLUMNS
+        ]
+    )
+
+
+def _write_profile_csv(summary: pl.DataFrame, output_path: Path, scope_pairs: list[tuple[str, str]]) -> pl.DataFrame:
+    frames = [_profile_scope(summary, scope, profile_type) for scope, profile_type in scope_pairs]
+    non_empty = [frame for frame in frames if not frame.is_empty()]
+    output = pl.concat(non_empty, how="diagonal_relaxed") if non_empty else pl.DataFrame({column: [] for column in PROFILE_EXPORT_COLUMNS})
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output.write_csv(output_path)
+    return output
+
+
+def _plot_delta_profile(
+    frame: pl.DataFrame,
+    x_col: str,
+    filename: str,
+    title: str,
+    figures_dir: Path,
+    order: list[str] | None = None,
+) -> None:
+    entry = frame.filter(pl.col("profile_type") == "entry_triggered") if "profile_type" in frame.columns else frame.clear()
+    if entry.is_empty():
+        _save_placeholder_figure(figures_dir / filename, title)
+        return
+
+    records = _ordered_records(entry, x_col, order)
+    labels = [str(record[x_col]) for record in records]
+    x = np.arange(len(labels))
+    width = 0.35
+    mfe = [0 if _is_null(record.get("mfe_pct_mean")) else float(record["mfe_pct_mean"]) * 100 for record in records]
+    mae = [0 if _is_null(record.get("mae_pct_mean")) else float(record["mae_pct_mean"]) * 100 for record in records]
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.bar(x - width / 2, mfe, width, label="entry MFE mean")
+    ax.bar(x + width / 2, mae, width, label="entry MAE mean")
+
+    success = frame.filter(pl.col("profile_type") == "successful_only") if "profile_type" in frame.columns else frame.clear()
+    if not success.is_empty():
+        lookup = {row[x_col]: row for row in success.to_dicts()}
+        ax2 = ax.twinx()
+        ax2.plot(
+            x,
+            [
+                0
+                if _is_null(lookup.get(record[x_col], {}).get("successful_share_of_confirmable"))
+                else float(lookup[record[x_col]]["successful_share_of_confirmable"]) * 100
+                for record in records
+            ],
+            color="#252525",
+            marker="o",
+            linewidth=2,
+            label="success rate",
+        )
+        ax2.set_ylabel("Success Rate (%)")
+        ax2.set_ylim(0, 100)
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, loc="upper right")
+    else:
+        ax.legend(loc="upper right")
+
+    ax.set_title(title)
+    ax.set_ylabel("Mean Excursion (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+    fig.tight_layout()
+    fig.savefig(figures_dir / filename)
+    plt.close(fig)
+
+
+def export_delta_dominance_mae_mfe_profiles(summary: pl.DataFrame, figures_dir: Path) -> None:
+    abs_profile = _write_profile_csv(
+        summary,
+        figures_dir / "delta_dominance_mae_mfe_abs_quantile.csv",
+        [
+            ("entry_excursion_abs_delta_imbalance_quantile", "entry_triggered"),
+            ("success_context_abs_delta_imbalance_quantile", "successful_only"),
+        ],
+    )
+    block_profile = _write_profile_csv(
+        summary,
+        figures_dir / "delta_dominance_mae_mfe_by_block.csv",
+        [
+            ("entry_excursion_minute_block_abs_delta_imbalance_quantile", "entry_triggered"),
+            ("success_context_minute_block_abs_delta_imbalance_quantile", "successful_only"),
+        ],
+    )
+    _write_profile_csv(
+        summary,
+        figures_dir / "delta_dominance_mae_mfe_by_creation_minute.csv",
+        [
+            ("entry_excursion_creation_minute_abs_delta_imbalance_quantile", "entry_triggered"),
+            ("success_context_creation_minute_abs_delta_imbalance_quantile", "successful_only"),
+        ],
+    )
+    _plot_delta_profile(
+        abs_profile,
+        "abs_delta_imbalance_quantile",
+        "delta_abs_quantile_mfe_mae_profile.png",
+        "Delta Dominance MAE/MFE Profile by Abs Quantile",
+        figures_dir,
+        ["q1_lowest", "q2", "q3", "q4_highest"],
+    )
+    early = block_profile.filter(pl.col("minute_block") == "15:50-15:52") if "minute_block" in block_profile.columns else block_profile.clear()
+    _plot_delta_profile(
+        early,
+        "abs_delta_imbalance_quantile",
+        "early_block_abs_delta_mfe_mae_profile.png",
+        "Early Block Delta Dominance MAE/MFE Profile",
+        figures_dir,
+        ["q1_lowest", "q2", "q3", "q4_highest"],
+    )
+
+
 def plot_fvg_summary_figures(events: pl.DataFrame, summary: pl.DataFrame, figures_dir: Path) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
     placeholder_files = [
@@ -997,6 +1176,7 @@ def plot_fvg_summary_figures(events: pl.DataFrame, summary: pl.DataFrame, figure
     plot_alignment_bucket_outcomes(summary, figures_dir); plot_alignment_bucket_by_minute_block(summary, figures_dir); plot_alignment_bucket_by_gap_bucket(summary, figures_dir); plot_alignment_bucket_counts(events, figures_dir)
     plot_entry_trigger_rate_by_alignment_bucket(summary, figures_dir); plot_mfe_mae_pct_by_alignment_bucket(summary, figures_dir); plot_mfe_pct_by_minute_block(summary, figures_dir); plot_mfe_pct_by_gap_bucket(summary, figures_dir)
     plot_successful_fvg_mae_by_alignment_bucket(summary, figures_dir); plot_successful_fvg_mae_by_stacked_flag(summary, figures_dir); plot_successful_fvg_mfe_by_alignment_bucket(summary, figures_dir); plot_successful_fvg_mfe_by_stacked_flag(summary, figures_dir)
+    export_delta_dominance_mae_mfe_profiles(summary, figures_dir)
 
 def run_macro_fvg_study(
     input_path: Path = INPUT_PATH,
