@@ -594,8 +594,8 @@ def main() -> None:
         print(f"[ERROR] Input not found: {MACRO_5S_INPUT_PATH}", file=sys.stderr)
         sys.exit(1)
     output, summary_output = write_macro_delta_reversal()
-    print(f"[OK] Wrote macro delta reversal → {output}")
-    print(f"[OK] Wrote macro delta reversal summary → {summary_output}")
+    print(f"[OK] Wrote macro delta reversal -> {output}")
+    print(f"[OK] Wrote macro delta reversal summary -> {summary_output}")
 
 
 if __name__ == "__main__":
