@@ -51,3 +51,37 @@ def test_write_macro_bucket_path_persists_outputs(tmp_path: Path):
     assert result == (output_path, summary_path)
     assert pl.read_parquet(output_path).height == 2
     assert pl.read_parquet(summary_path).height > 0
+
+
+def test_build_macro_bucket_path_maps_candles_and_named_windows():
+    rows = []
+    rows += _complete_candle("2025-01-02", 0, [1, 2, -3, 4, -5, 6, -7, 8, -9, 10, -11, 12])
+    rows += _complete_candle("2025-01-02", 108, [-1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12])
+    rows.append(_s("2025-01-02", 12, 999, 999, 999))
+    rows.append(_s("2025-01-02", 107, 999, 999, 999))
+
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    k350 = out.filter(pl.col("candle") == "k350").row(0, named=True)
+    k359 = out.filter(pl.col("candle") == "k359").row(0, named=True)
+
+    assert out.height == 2
+    assert k350["bucket_count"] == 12
+    assert k350["complete_candle"] is True
+    assert k350["b0_volume_delta"] == 1
+    assert k350["b11_volume_delta"] == 12
+    assert k359["b0_volume_delta"] == -1
+    assert k359["b11_volume_delta"] == -12
+    assert "b12_volume_delta" not in out.columns
+
+    assert k350["cum_00_04_volume_delta"] == 1
+    assert k350["cum_00_09_volume_delta"] == 3
+    assert k350["cum_00_14_volume_delta"] == 0
+    assert k350["cum_00_59_volume_delta"] == 8
+    assert k350["early_5s_volume_delta"] == 1
+    assert k350["early_10s_volume_delta"] == 3
+    assert k350["early_30s_volume_delta"] == 5
+    assert k350["late_30s_volume_delta"] == 3
+    assert k350["full_volume_delta"] == 8
+    assert k350["early_10s_delta_imbalance"] == pytest.approx(3 / (11 + 12))
+    assert k350["full_sign"] == 1

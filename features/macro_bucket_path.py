@@ -22,6 +22,14 @@ CANDLE_SPECS = {
     "k359": (108, 119),
 }
 RELATIVE_BUCKETS = list(range(12))
+CUMULATIVE_WINDOWS = {f"cum_00_{end * 5 + 4:02d}": (0, end) for end in RELATIVE_BUCKETS}
+NAMED_WINDOWS = {
+    "early_5s": (0, 0),
+    "early_10s": (0, 1),
+    "early_30s": (0, 5),
+    "late_30s": (6, 11),
+    "full": (0, 11),
+}
 
 
 def _missing_columns(frame: pl.DataFrame, required: set[str]) -> list[str]:
@@ -40,6 +48,31 @@ def _safe_ratio_expr(numerator: pl.Expr, denominator: pl.Expr) -> pl.Expr:
 
 def _sign_expr(column: str) -> pl.Expr:
     return pl.when(pl.col(column) > 0).then(1).when(pl.col(column) < 0).then(-1).otherwise(0)
+
+
+def _add_window_columns(frame: pl.DataFrame, prefix: str, start: int, end: int) -> pl.DataFrame:
+    delta_cols = [pl.col(f"b{bucket}_volume_delta").fill_null(0) for bucket in range(start, end + 1)]
+    classified_cols = [pl.col(f"b{bucket}_classified_size").fill_null(0) for bucket in range(start, end + 1)]
+    total_cols = [pl.col(f"b{bucket}_total_size").fill_null(0) for bucket in range(start, end + 1)]
+    return frame.with_columns(
+        pl.sum_horizontal(delta_cols).alias(f"{prefix}_volume_delta"),
+        pl.sum_horizontal(classified_cols).alias(f"{prefix}_classified_size"),
+        pl.sum_horizontal(total_cols).alias(f"{prefix}_total_size"),
+    ).with_columns(
+        _safe_ratio_expr(pl.col(f"{prefix}_volume_delta"), pl.col(f"{prefix}_classified_size")).alias(
+            f"{prefix}_delta_imbalance"
+        ),
+        _sign_expr(f"{prefix}_volume_delta").alias(f"{prefix}_sign"),
+    )
+
+
+def _add_path_windows(frame: pl.DataFrame) -> pl.DataFrame:
+    out = frame
+    for prefix, (start, end) in CUMULATIVE_WINDOWS.items():
+        out = _add_window_columns(out, prefix, start, end)
+    for prefix, (start, end) in NAMED_WINDOWS.items():
+        out = _add_window_columns(out, prefix, start, end)
+    return out
 
 
 def _build_candle_rows(macro_5s: pl.DataFrame, candle: str, start: int, end: int) -> pl.DataFrame:
@@ -67,7 +100,8 @@ def _build_candle_rows(macro_5s: pl.DataFrame, candle: str, start: int, end: int
         )
         out = out.join(one, on=["trade_date_et", "candle"], how="left")
     sign_exprs = [_sign_expr(f"b{bucket}_volume_delta").alias(f"b{bucket}_sign") for bucket in RELATIVE_BUCKETS]
-    return out.with_columns(sign_exprs).rename({"trade_date_et": "date"})
+    out = out.with_columns(sign_exprs).rename({"trade_date_et": "date"})
+    return _add_path_windows(out)
 
 
 def build_macro_bucket_path(macro_5s: pl.DataFrame) -> pl.DataFrame:
