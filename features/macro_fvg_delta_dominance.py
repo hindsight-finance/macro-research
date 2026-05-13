@@ -159,6 +159,8 @@ def enrich_fvg_events_with_delta_dominance(
     if events.is_empty():
         return _with_empty_delta_columns(events)
 
+    events = events.drop([column for column in DELTA_DOMINANCE_COLUMNS if column in events.columns])
+
     delta = volume_delta_5s.select(
         pl.col("trade_date_et").alias("date"),
         pl.col("macro_bucket_index").cast(pl.Int64).alias("fvg_delta_bucket_index"),

@@ -2106,6 +2106,7 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     input_path = tmp_path / "nq_1m.parquet"
     events_path = tmp_path / "nq_macro_fvg_events.parquet"
     summary_path = tmp_path / "nq_macro_fvg_summary.parquet"
+    delta_path = tmp_path / "nq_macro_volume_delta_5s.parquet"
     figures_dir = tmp_path / "figs" / "fvg"
 
     bars = make_bars(
@@ -2177,11 +2178,36 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
         ]
     )
     bars.write_parquet(input_path)
+    pl.DataFrame(
+        [
+            {
+                "trade_date_et": datetime(2025, 1, 2).date(),
+                "macro_bucket_index": 24,
+                "volume_delta": -50,
+                "delta_imbalance": -0.50,
+                "tick_delta": -5,
+                "classified_share": 1.0,
+                "total_size": 100,
+                "is_empty": False,
+            },
+            {
+                "trade_date_et": datetime(2025, 1, 2).date(),
+                "macro_bucket_index": 84,
+                "volume_delta": -20,
+                "delta_imbalance": -0.20,
+                "tick_delta": -2,
+                "classified_share": 1.0,
+                "total_size": 100,
+                "is_empty": False,
+            },
+        ]
+    ).write_parquet(delta_path)
 
     run_macro_fvg_study(
         input_path=input_path,
         events_output_path=events_path,
         summary_output_path=summary_path,
+        volume_delta_5s_path=delta_path,
         figures_dir=figures_dir,
     )
 
@@ -2193,8 +2219,12 @@ def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     assert "successful_by_1559" in events.columns
     assert "stacked_continuation_fvg" in events.columns
     assert "first_retrace_candle_at" in events.columns
+    assert "aligned_delta_imbalance" in events.columns
+    assert "abs_delta_imbalance_quantile" in events.columns
     assert "success_context_alignment_bucket" in set(summary["summary_scope"].to_list())
     assert "success_context_stacked_flag" in set(summary["summary_scope"].to_list())
+    assert "success_context_aligned_delta_imbalance_quantile" in set(summary["summary_scope"].to_list())
+    assert "success_context_abs_delta_imbalance_quantile" in set(summary["summary_scope"].to_list())
     assert (figures_dir / "hold_vs_invalidate_by_side.png").exists()
     assert (figures_dir / "stage1_to_stage2_outcomes.png").exists()
     assert (figures_dir / "creation_minute_outcome_heatmap.png").exists()
