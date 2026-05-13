@@ -75,6 +75,81 @@ def _add_path_windows(frame: pl.DataFrame) -> pl.DataFrame:
     return out
 
 
+def _first_max_index_expr(value_prefix: str, max_col: str) -> pl.Expr:
+    expr = None
+    for bucket in RELATIVE_BUCKETS:
+        if value_prefix == "bucket":
+            is_max = pl.col(f"b{bucket}_volume_delta").fill_null(0).abs() == pl.col(max_col)
+        else:
+            is_max = pl.col(f"cum_00_{bucket * 5 + 4:02d}_volume_delta").fill_null(0).abs() == pl.col(max_col)
+        expr = pl.when(is_max).then(bucket) if expr is None else expr.when(is_max).then(bucket)
+    return pl.when(pl.col(max_col) > 0).then(expr.otherwise(None)).otherwise(None)
+
+
+def _add_path_diagnostics(frame: pl.DataFrame) -> pl.DataFrame:
+    abs_bucket_exprs = [pl.col(f"b{bucket}_volume_delta").fill_null(0).abs() for bucket in RELATIVE_BUCKETS]
+    cum_cols = [f"cum_00_{bucket * 5 + 4:02d}_volume_delta" for bucket in RELATIVE_BUCKETS]
+    abs_cum_values = [pl.col(col).fill_null(0).abs() for col in cum_cols]
+
+    out = frame.with_columns(
+        pl.sum_horizontal(abs_bucket_exprs).alias("sum_abs_bucket_delta"),
+        pl.max_horizontal(abs_bucket_exprs).alias("max_abs_bucket_delta"),
+        pl.max_horizontal(abs_cum_values).alias("peak_abs_cum_delta"),
+    ).with_columns(
+        _safe_ratio_expr(pl.col("full_volume_delta"), pl.col("sum_abs_bucket_delta")).alias("path_efficiency"),
+        _safe_ratio_expr(pl.col("early_10s_volume_delta").abs(), pl.col("sum_abs_bucket_delta")).alias(
+            "early_10s_abs_flow_share"
+        ),
+        _first_max_index_expr("bucket", "max_abs_bucket_delta").alias("max_abs_bucket_index"),
+        _first_max_index_expr("cum", "peak_abs_cum_delta").alias("peak_abs_cum_bucket_index"),
+    )
+
+    early_sign = pl.col("early_10s_sign")
+    favorable = [pl.col(col).fill_null(0) * early_sign for col in cum_cols]
+    out = out.with_columns(
+        pl.when(early_sign != 0).then(pl.max_horizontal(favorable)).otherwise(None).alias("max_favorable_cum_delta"),
+        pl.when(early_sign != 0).then(pl.min_horizontal(favorable)).otherwise(None).alias("max_adverse_cum_delta"),
+    )
+
+    flip_struct = pl.struct([f"cum_00_{bucket * 5 + 4:02d}_sign" for bucket in RELATIVE_BUCKETS])
+    return out.with_columns(
+        flip_struct.map_elements(_count_last_nonzero_sign_flips, return_dtype=pl.Int64).alias("cum_sign_flip_count")
+    )
+
+
+def _count_last_nonzero_sign_flips(values: dict[str, int]) -> int:
+    flips = 0
+    last = 0
+    for value in values.values():
+        sign = int(value or 0)
+        if sign == 0:
+            continue
+        if last != 0 and sign != last:
+            flips += 1
+        last = sign
+    return flips
+
+
+def _add_continuation_flags(frame: pl.DataFrame) -> pl.DataFrame:
+    comparisons = {
+        "30s": "early_30s",
+        "late30": "late_30s",
+        "full": "full",
+    }
+    exprs = []
+    early_sign = pl.col("early_10s_sign")
+    for label, target in comparisons.items():
+        target_sign = pl.col(f"{target}_sign")
+        has_signal = (early_sign != 0) & (target_sign != 0)
+        exprs.extend(
+            [
+                (has_signal & (early_sign == target_sign)).alias(f"early_10s_continues_to_{label}"),
+                (has_signal & (early_sign == -target_sign)).alias(f"early_10s_fades_to_{label}"),
+            ]
+        )
+    return frame.with_columns(exprs)
+
+
 def _build_candle_rows(macro_5s: pl.DataFrame, candle: str, start: int, end: int) -> pl.DataFrame:
     filtered = macro_5s.filter(pl.col("macro_bucket_index").is_between(start, end)).with_columns(
         pl.lit(candle).alias("candle"),
@@ -101,7 +176,9 @@ def _build_candle_rows(macro_5s: pl.DataFrame, candle: str, start: int, end: int
         out = out.join(one, on=["trade_date_et", "candle"], how="left")
     sign_exprs = [_sign_expr(f"b{bucket}_volume_delta").alias(f"b{bucket}_sign") for bucket in RELATIVE_BUCKETS]
     out = out.with_columns(sign_exprs).rename({"trade_date_et": "date"})
-    return _add_path_windows(out)
+    out = _add_path_windows(out)
+    out = _add_path_diagnostics(out)
+    return _add_continuation_flags(out)
 
 
 def build_macro_bucket_path(macro_5s: pl.DataFrame) -> pl.DataFrame:

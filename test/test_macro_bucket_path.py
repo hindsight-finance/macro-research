@@ -85,3 +85,52 @@ def test_build_macro_bucket_path_maps_candles_and_named_windows():
     assert k350["full_volume_delta"] == 8
     assert k350["early_10s_delta_imbalance"] == pytest.approx(3 / (11 + 12))
     assert k350["full_sign"] == 1
+
+
+def test_build_macro_bucket_path_adds_path_diagnostics_and_relationships():
+    rows = _complete_candle("2025-01-02", 0, [5, 5, -3, -4, 10, -2, -8, -1, -1, -1, -1, -1])
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+    row = out.row(0, named=True)
+
+    assert row["sum_abs_bucket_delta"] == 42
+    assert row["path_efficiency"] == pytest.approx(-2 / 42)
+    assert row["early_10s_abs_flow_share"] == pytest.approx(10 / 42)
+    assert row["max_abs_bucket_delta"] == 10
+    assert row["max_abs_bucket_index"] == 4
+    assert row["peak_abs_cum_delta"] == 13
+    assert row["peak_abs_cum_bucket_index"] == 4
+    assert row["max_favorable_cum_delta"] == 13
+    assert row["max_adverse_cum_delta"] == -2
+    assert row["cum_sign_flip_count"] == 1
+    assert row["early_10s_continues_to_30s"] is True
+    assert row["early_10s_fades_to_30s"] is False
+    assert row["early_10s_continues_to_late30"] is False
+    assert row["early_10s_fades_to_late30"] is True
+    assert row["early_10s_continues_to_full"] is False
+    assert row["early_10s_fades_to_full"] is True
+
+
+def test_build_macro_bucket_path_relationships_require_nonzero_signs():
+    rows = _complete_candle("2025-01-02", 0, [0, 0, 1, -1, 0, 0, 2, -2, 0, 0, 0, 0])
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+    row = out.row(0, named=True)
+
+    assert row["early_10s_sign"] == 0
+    assert row["full_sign"] == 0
+    assert row["early_10s_continues_to_full"] is False
+    assert row["early_10s_fades_to_full"] is False
+
+
+def test_build_macro_bucket_path_counts_sign_flips_through_zero_and_nulls_zero_signal_extremes():
+    rows = _complete_candle("2025-01-02", 0, [5, -5, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    rows += _complete_candle("2025-01-03", 0, [0] * 12)
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    flip_row = out.filter(pl.col("date") == pl.date(2025, 1, 2)).row(0, named=True)
+    zero_row = out.filter(pl.col("date") == pl.date(2025, 1, 3)).row(0, named=True)
+
+    assert flip_row["cum_sign_flip_count"] == 1
+    assert zero_row["max_abs_bucket_index"] is None
+    assert zero_row["peak_abs_cum_bucket_index"] is None
+    assert zero_row["max_favorable_cum_delta"] is None
+    assert zero_row["max_adverse_cum_delta"] is None
