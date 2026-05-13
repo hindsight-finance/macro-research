@@ -7,6 +7,7 @@ import polars as pl
 
 GLOBEX_1M_INPUT_PATH = Path("outputs/nq_globex_volume_delta_1m.parquet")
 MACRO_1M_INPUT_PATH = Path("outputs/nq_macro_volume_delta_1m.parquet")
+MACRO_5S_INPUT_PATH = Path("outputs/nq_macro_volume_delta_5s.parquet")
 OUTPUT_PATH = Path("outputs/nq_macro_delta_reversal.parquet")
 SUMMARY_OUTPUT_PATH = Path("outputs/nq_macro_delta_reversal_summary.parquet")
 
@@ -20,6 +21,13 @@ GLOBEX_REQUIRED_COLUMNS = {
 MACRO_REQUIRED_COLUMNS = {
     "trade_date_et",
     "macro_minute_index",
+    "volume_delta",
+    "classified_size",
+    "total_size",
+}
+MACRO_5S_REQUIRED_COLUMNS = {
+    "trade_date_et",
+    "macro_bucket_index",
     "volume_delta",
     "classified_size",
     "total_size",
@@ -39,13 +47,21 @@ def _missing_columns(frame: pl.DataFrame, required: set[str]) -> list[str]:
     return sorted(required.difference(frame.columns))
 
 
-def _validate_inputs(globex_1m: pl.DataFrame, macro_1m: pl.DataFrame) -> None:
+def _validate_inputs(
+    globex_1m: pl.DataFrame,
+    macro_1m: pl.DataFrame,
+    macro_5s: pl.DataFrame | None = None,
+) -> None:
     globex_missing = _missing_columns(globex_1m, GLOBEX_REQUIRED_COLUMNS)
     if globex_missing:
         raise ValueError(f"Missing Globex volume-delta columns: {globex_missing}")
     macro_missing = _missing_columns(macro_1m, MACRO_REQUIRED_COLUMNS)
     if macro_missing:
         raise ValueError(f"Missing macro volume-delta columns: {macro_missing}")
+    if macro_5s is not None:
+        macro_5s_missing = _missing_columns(macro_5s, MACRO_5S_REQUIRED_COLUMNS)
+        if macro_5s_missing:
+            raise ValueError(f"Missing macro 5-second volume-delta columns: {macro_5s_missing}")
 
 
 def _safe_ratio_expr(numerator: pl.Expr, denominator: pl.Expr) -> pl.Expr:
@@ -157,8 +173,12 @@ def _add_signs_and_relationships(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def build_macro_delta_reversal(globex_1m: pl.DataFrame, macro_1m: pl.DataFrame) -> pl.DataFrame:
-    _validate_inputs(globex_1m, macro_1m)
+def build_macro_delta_reversal(
+    globex_1m: pl.DataFrame,
+    macro_1m: pl.DataFrame,
+    macro_5s: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    _validate_inputs(globex_1m, macro_1m, macro_5s)
 
     target = _extract_k359(macro_1m)
     eth = _aggregate_window(globex_1m, "session_minute_index", 0, 929, "eth_pre_rth")
@@ -284,18 +304,20 @@ def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
 def load_volume_delta_inputs(
     globex_path: str | Path = GLOBEX_1M_INPUT_PATH,
     macro_path: str | Path = MACRO_1M_INPUT_PATH,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    return pl.read_parquet(globex_path), pl.read_parquet(macro_path)
+    macro_5s_path: str | Path = MACRO_5S_INPUT_PATH,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    return pl.read_parquet(globex_path), pl.read_parquet(macro_path), pl.read_parquet(macro_5s_path)
 
 
 def write_macro_delta_reversal(
     globex_path: str | Path = GLOBEX_1M_INPUT_PATH,
     macro_path: str | Path = MACRO_1M_INPUT_PATH,
+    macro_5s_path: str | Path = MACRO_5S_INPUT_PATH,
     output_path: str | Path = OUTPUT_PATH,
     summary_output_path: str | Path = SUMMARY_OUTPUT_PATH,
 ) -> tuple[Path, Path]:
-    globex_1m, macro_1m = load_volume_delta_inputs(globex_path, macro_path)
-    study = build_macro_delta_reversal(globex_1m, macro_1m)
+    globex_1m, macro_1m, macro_5s = load_volume_delta_inputs(globex_path, macro_path, macro_5s_path)
+    study = build_macro_delta_reversal(globex_1m, macro_1m, macro_5s)
     summary = summarize_macro_delta_reversal(study)
     output = Path(output_path)
     summary_output = Path(summary_output_path)
@@ -312,6 +334,9 @@ def main() -> None:
         sys.exit(1)
     if not MACRO_1M_INPUT_PATH.exists():
         print(f"[ERROR] Input not found: {MACRO_1M_INPUT_PATH}", file=sys.stderr)
+        sys.exit(1)
+    if not MACRO_5S_INPUT_PATH.exists():
+        print(f"[ERROR] Input not found: {MACRO_5S_INPUT_PATH}", file=sys.stderr)
         sys.exit(1)
     output, summary_output = write_macro_delta_reversal()
     print(f"[OK] Wrote macro delta reversal → {output}")

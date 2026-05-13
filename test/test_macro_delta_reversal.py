@@ -18,6 +18,10 @@ def _macro_rows(rows: list[dict]) -> pl.DataFrame:
     return pl.DataFrame(rows).with_columns(pl.col("trade_date_et").cast(pl.Date))
 
 
+def _macro_5s_rows(rows: list[dict]) -> pl.DataFrame:
+    return pl.DataFrame(rows).with_columns(pl.col("trade_date_et").cast(pl.Date))
+
+
 def _g(date: str, idx: int, delta: int, classified: int | None = None, total: int | None = None) -> dict:
     classified_size = abs(delta) if classified is None else classified
     total_size = classified_size if total is None else total
@@ -44,6 +48,19 @@ def _m(date: str, minute: int, delta: int, classified: int | None = None, total:
     }
 
 
+def _s(date: str, bucket: int, delta: int, classified: int | None = None, total: int | None = None) -> dict:
+    classified_size = abs(delta) if classified is None else classified
+    total_size = classified_size if total is None else total
+    return {
+        "datetime_utc": None,
+        "trade_date_et": date,
+        "macro_bucket_index": bucket,
+        "volume_delta": delta,
+        "classified_size": classified_size,
+        "total_size": total_size,
+    }
+
+
 def test_build_macro_delta_reversal_requires_globex_schema():
     globex = pl.DataFrame({"trade_date_et": ["2025-01-02"]}).with_columns(pl.col("trade_date_et").cast(pl.Date))
     macro = _macro_rows([_m("2025-01-02", 59, -10)])
@@ -58,6 +75,15 @@ def test_build_macro_delta_reversal_requires_macro_schema():
 
     with pytest.raises(ValueError, match="Missing macro volume-delta columns"):
         build_macro_delta_reversal(globex, macro)
+
+
+def test_build_macro_delta_reversal_requires_macro_5s_schema_when_provided():
+    globex = _globex_rows([_g("2025-01-02", 930, 10)])
+    macro = _macro_rows([_m("2025-01-02", 59, -5)])
+    bad_5s = pl.DataFrame({"trade_date_et": ["2025-01-02"]}).with_columns(pl.col("trade_date_et").cast(pl.Date))
+
+    with pytest.raises(ValueError, match="Missing macro 5-second volume-delta columns"):
+        build_macro_delta_reversal(globex, macro, bad_5s)
 
 
 def test_build_macro_delta_reversal_aggregates_core_windows_and_target():
@@ -207,11 +233,13 @@ def test_write_macro_delta_reversal_persists_study_and_summary(tmp_path: Path):
     macro_path = tmp_path / "macro.parquet"
     output_path = tmp_path / "nested" / "study.parquet"
     summary_path = tmp_path / "nested" / "summary.parquet"
+    macro_5s_path = tmp_path / "macro_5s.parquet"
 
     _globex_rows([_g("2025-01-02", 930, 10)]).write_parquet(globex_path)
     _macro_rows([_m("2025-01-02", 59, -5)]).write_parquet(macro_path)
+    _macro_5s_rows([_s("2025-01-02", 118, -2)]).write_parquet(macro_5s_path)
 
-    result = write_macro_delta_reversal(globex_path, macro_path, output_path, summary_path)
+    result = write_macro_delta_reversal(globex_path, macro_path, macro_5s_path, output_path, summary_path)
 
     assert result == (output_path, summary_path)
     study = pl.read_parquet(output_path)
@@ -219,3 +247,20 @@ def test_write_macro_delta_reversal_persists_study_and_summary(tmp_path: Path):
     assert study.height == 1
     assert study.row(0, named=True)["rth_pre_macro_opposes_k359"] is True
     assert summary.filter(pl.col("summary_type") == "sign").height == 6
+
+
+def test_write_macro_delta_reversal_requires_macro_5s_path_argument(tmp_path: Path):
+    globex_path = tmp_path / "globex.parquet"
+    macro_path = tmp_path / "macro.parquet"
+    macro_5s_path = tmp_path / "macro_5s.parquet"
+    output_path = tmp_path / "study.parquet"
+    summary_path = tmp_path / "summary.parquet"
+
+    _globex_rows([_g("2025-01-02", 930, 10)]).write_parquet(globex_path)
+    _macro_rows([_m("2025-01-02", 59, -5)]).write_parquet(macro_path)
+    _macro_5s_rows([_s("2025-01-02", 118, -2)]).write_parquet(macro_5s_path)
+
+    result = write_macro_delta_reversal(globex_path, macro_path, macro_5s_path, output_path, summary_path)
+
+    assert result == (output_path, summary_path)
+    assert pl.read_parquet(output_path).height == 1
