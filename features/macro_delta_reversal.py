@@ -62,6 +62,7 @@ TARGET_WINDOWS_5S = {
 }
 
 TARGET_WINDOWS = ["k359", *TARGET_WINDOWS_5S.keys(), *[f"k359_bucket_{bucket}" for bucket in range(108, 120)]]
+ROBUST_TARGET_WINDOWS = ["k359", *TARGET_WINDOWS_5S.keys()]
 
 
 def _missing_columns(frame: pl.DataFrame, required: set[str]) -> list[str]:
@@ -474,6 +475,34 @@ def _target_tail_rows(study: pl.DataFrame, predictor: str, target: str) -> list[
     return rows
 
 
+def _macro_pre59_context_rows(study: pl.DataFrame, target: str) -> list[dict]:
+    specs = [
+        ("macro_pre59_same_as_eth_rth_pre59", "eth_rth_pre59", True),
+        ("macro_pre59_opposes_eth_rth_pre59", "eth_rth_pre59", False),
+        ("macro_pre59_same_as_rth_pre_macro", "rth_pre_macro", True),
+        ("macro_pre59_opposes_rth_pre_macro", "rth_pre_macro", False),
+    ]
+    rows = []
+    for condition, base_predictor, same_direction in specs:
+        base_sign = pl.col(f"{base_predictor}_sign")
+        macro_sign = pl.col("macro_pre59_sign")
+        valid = (base_sign != 0) & (macro_sign != 0)
+        direction_filter = macro_sign == base_sign if same_direction else macro_sign == -base_sign
+        subset = study.filter(valid & direction_filter)
+        unresolved_predictor = "rth_macro_pre59" if base_predictor == "rth_pre_macro" else "eth_rth_macro_pre59"
+        rows.append(
+            _base_target_summary_row(
+                study,
+                unresolved_predictor,
+                target,
+                "macro_pre59_context",
+                subset,
+                condition=condition,
+            )
+        )
+    return rows
+
+
 def _normalize_summary_rows(rows: list[dict]) -> list[dict]:
     keys = sorted({key for row in rows for key in row})
     return [{key: row.get(key) for key in keys} for row in rows]
@@ -482,6 +511,8 @@ def _normalize_summary_rows(rows: list[dict]) -> list[dict]:
 def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict] = []
     n_days = study.height
+    available_targets = _available_target_windows(study)
+    robust_targets = [target for target in ROBUST_TARGET_WINDOWS if target in available_targets]
     for predictor in PREDICTORS:
         signal = study.filter(pl.col(f"{predictor}_has_signal"))
         n_signal_days = signal.height
@@ -514,11 +545,14 @@ def summarize_macro_delta_reversal(study: pl.DataFrame) -> pl.DataFrame:
         )
         rows.extend(_decile_rows(study, predictor))
     for predictor in PRIMARY_PREDICTORS:
-        for target in _available_target_windows(study):
+        for target in available_targets:
             rows.append(_target_pair_sign_row(study, predictor, target))
+        for target in robust_targets:
             rows.extend(_target_decile_rows(study, predictor, target, "volume_delta", "target_raw_decile"))
             rows.extend(_target_decile_rows(study, predictor, target, "delta_imbalance", "target_imbalance_decile"))
             rows.extend(_target_tail_rows(study, predictor, target))
+    for target in robust_targets:
+        rows.extend(_macro_pre59_context_rows(study, target))
     return pl.DataFrame(_normalize_summary_rows(rows), infer_schema_length=None)
 
 

@@ -385,6 +385,55 @@ def test_summarize_macro_delta_reversal_adds_positive_and_negative_tail_rows():
     assert positive_top_20["median_target_delta"] < 0
 
 
+def test_summarize_macro_delta_reversal_adds_macro_pre59_context_rows():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 930, 10),
+            _g("2025-01-03", 930, 10),
+            _g("2025-01-04", 930, -10),
+            _g("2025-01-05", 930, -10),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 50, 2),
+            _m("2025-01-02", 59, -5),
+            _m("2025-01-03", 50, -2),
+            _m("2025-01-03", 59, -5),
+            _m("2025-01-04", 50, -2),
+            _m("2025-01-04", 59, 5),
+            _m("2025-01-05", 50, 2),
+            _m("2025-01-05", 59, 5),
+        ]
+    )
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 118, -5),
+            _s("2025-01-03", 118, -5),
+            _s("2025-01-04", 118, 5),
+            _s("2025-01-05", 118, 5),
+        ]
+    )
+    study = build_macro_delta_reversal(globex, macro, macro_5s)
+
+    summary = summarize_macro_delta_reversal(study)
+    same = summary.filter(
+        (pl.col("summary_type") == "macro_pre59_context")
+        & (pl.col("condition") == "macro_pre59_same_as_rth_pre_macro")
+        & (pl.col("target_window") == "k359_50_59")
+    ).row(0, named=True)
+    opposes = summary.filter(
+        (pl.col("summary_type") == "macro_pre59_context")
+        & (pl.col("condition") == "macro_pre59_opposes_rth_pre_macro")
+        & (pl.col("target_window") == "k359_50_59")
+    ).row(0, named=True)
+
+    assert same["n_days"] == 2
+    assert same["opposite_rate"] == pytest.approx(1.0)
+    assert opposes["n_days"] == 2
+    assert opposes["opposite_rate"] == pytest.approx(1.0)
+
+
 def test_write_macro_delta_reversal_persists_study_and_summary(tmp_path: Path):
     globex_path = tmp_path / "globex.parquet"
     macro_path = tmp_path / "macro.parquet"
