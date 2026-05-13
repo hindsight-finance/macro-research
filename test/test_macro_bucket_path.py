@@ -110,6 +110,29 @@ def test_build_macro_bucket_path_adds_path_diagnostics_and_relationships():
     assert row["early_10s_fades_to_full"] is True
 
 
+def test_build_macro_bucket_path_adds_residual_windows_and_relationships():
+    rows = _complete_candle("2025-01-02", 0, [10, 5, -2, -3, -4, -5, 1, 1, 1, 1, 1, 1])
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+    row = out.row(0, named=True)
+
+    assert row["early_10s_volume_delta"] == 15
+    assert row["early_30s_volume_delta"] == 1
+    assert row["full_volume_delta"] == 7
+    assert row["post_10s_to_30s_volume_delta"] == -14
+    assert row["post_10s_volume_delta"] == -8
+    assert row["post_10s_to_30s_classified_size"] == (12 + 13 + 14 + 15)
+    assert row["post_10s_to_30s_total_size"] == (13 + 14 + 15 + 16)
+    assert row["post_10s_to_30s_delta_imbalance"] == pytest.approx(-14 / (12 + 13 + 14 + 15))
+    assert row["post_10s_to_30s_sign"] == -1
+    assert row["post_10s_sign"] == -1
+    assert row["early_10s_continues_to_30s"] is True
+    assert row["early_10s_continues_to_full"] is True
+    assert row["early_10s_continues_to_post10"] is False
+    assert row["early_10s_fades_to_post10"] is True
+    assert row["early_10s_continues_to_post10_30s"] is False
+    assert row["early_10s_fades_to_post10_30s"] is True
+
+
 def test_build_macro_bucket_path_relationships_require_nonzero_signs():
     rows = _complete_candle("2025-01-02", 0, [0, 0, 1, -1, 0, 0, 2, -2, 0, 0, 0, 0])
     out = build_macro_bucket_path(_macro_5s_rows(rows))
@@ -175,6 +198,18 @@ def test_build_macro_bucket_path_skips_deciles_when_too_few_unique_values_and_fa
     assert out.filter(pl.col("early_10s_sign") == 0)["early_10s_category"].unique().to_list() == ["neutral"]
 
 
+def test_build_macro_bucket_path_signed_categories_never_contradict_early_sign():
+    rows = []
+    for i in range(20):
+        day = f"2025-07-{i + 1:02d}"
+        rows += _complete_candle(day, 0, [i + 1, 0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5])
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    categories = set(out["early_10s_category"].to_list())
+    assert categories <= {"weak_positive", "strong_positive"}
+    assert not categories.intersection({"strong_negative", "weak_negative", "neutral"})
+
+
 def test_build_macro_bucket_path_deciles_ignore_nulls_and_keep_null_rows_null():
     rows = []
     for i in range(10):
@@ -235,6 +270,30 @@ def test_summarize_macro_bucket_path_adds_expected_summary_types_and_target_deno
     assert cat["continue_to_full_rate"] is not None
     assert cat["median_late_30s_delta"] is not None
     assert cat["median_path_efficiency"] is not None
+
+
+def test_summarize_macro_bucket_path_adds_residual_denominators_and_rates():
+    rows = []
+    rows += _complete_candle("2025-08-01", 0, [5, 5, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0])
+    rows += _complete_candle("2025-08-02", 0, [5, 5, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0])
+    rows += _complete_candle("2025-08-03", 0, [5, 5, 1, -1, 0, 0, 0, 0, 0, 0, 0, 0])
+    rows += _complete_candle("2025-08-04", 0, [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0])
+    study = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    summary = summarize_macro_bucket_path(study)
+    baseline = summary.filter((pl.col("summary_type") == "candle_baseline") & (pl.col("candle") == "k350")).row(0, named=True)
+
+    assert baseline["n_complete_days"] == 4
+    assert baseline["n_signal_post10_days"] == 2
+    assert baseline["continue_to_post10_count"] == 1
+    assert baseline["fade_to_post10_count"] == 1
+    assert baseline["continue_to_post10_rate"] == 0.5
+    assert baseline["fade_to_post10_rate"] == 0.5
+    assert baseline["n_signal_post10_30s_days"] == 2
+    assert baseline["continue_to_post10_30s_count"] == 1
+    assert baseline["fade_to_post10_30s_count"] == 1
+    assert baseline["continue_to_post10_30s_rate"] == 0.5
+    assert baseline["fade_to_post10_30s_rate"] == 0.5
 
 
 def test_summarize_macro_bucket_path_filters_rates_to_complete_candles():

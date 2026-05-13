@@ -26,7 +26,9 @@ CUMULATIVE_WINDOWS = {f"cum_00_{end * 5 + 4:02d}": (0, end) for end in RELATIVE_
 NAMED_WINDOWS = {
     "early_5s": (0, 0),
     "early_10s": (0, 1),
+    "post_10s_to_30s": (2, 5),
     "early_30s": (0, 5),
+    "post_10s": (2, 11),
     "late_30s": (6, 11),
     "full": (0, 11),
 }
@@ -136,6 +138,8 @@ def _count_last_nonzero_sign_flips(values: dict[str, int]) -> int:
 def _add_continuation_flags(frame: pl.DataFrame) -> pl.DataFrame:
     comparisons = {
         "30s": "early_30s",
+        "post10_30s": "post_10s_to_30s",
+        "post10": "post_10s",
         "late30": "late_30s",
         "full": "full",
     }
@@ -233,18 +237,12 @@ def _add_conviction_categories(frame: pl.DataFrame) -> pl.DataFrame:
     return out.with_columns(
         pl.when(pl.col("early_10s_sign") == 0)
         .then(pl.lit("neutral"))
-        .when(pl.col("early_10s_raw_decile").is_in([1, 2]))
+        .when((pl.col("early_10s_sign") < 0) & pl.col("early_10s_raw_decile").is_in([1, 2]))
         .then(pl.lit("strong_negative"))
-        .when(pl.col("early_10s_raw_decile").is_in([3, 4]))
-        .then(pl.lit("weak_negative"))
-        .when(pl.col("early_10s_raw_decile").is_in([5, 6]))
-        .then(pl.lit("neutral"))
-        .when(pl.col("early_10s_raw_decile").is_in([7, 8]))
-        .then(pl.lit("weak_positive"))
-        .when(pl.col("early_10s_raw_decile").is_in([9, 10]))
-        .then(pl.lit("strong_positive"))
         .when(pl.col("early_10s_sign") < 0)
         .then(pl.lit("weak_negative"))
+        .when((pl.col("early_10s_sign") > 0) & pl.col("early_10s_raw_decile").is_in([9, 10]))
+        .then(pl.lit("strong_positive"))
         .when(pl.col("early_10s_sign") > 0)
         .then(pl.lit("weak_positive"))
         .otherwise(None)
@@ -278,24 +276,24 @@ def _scalar(frame: pl.DataFrame, expr: pl.Expr) -> float | int | None:
     return frame.select(expr).item()
 
 
-def _sign_count(subset: pl.DataFrame, column: str, sign: int) -> int:
-    if sign > 0:
-        return subset.filter(pl.col(column) > 0).height
-    if sign < 0:
-        return subset.filter(pl.col(column) < 0).height
-    return subset.filter(pl.col(column) == 0).height
-
-
 def _base_summary_row(subset: pl.DataFrame, summary_type: str, candle: str, **labels: object) -> dict:
     complete = subset.filter(pl.col("complete_candle"))
     signal_30s = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("early_30s_sign") != 0))
+    signal_post10_30s = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("post_10s_to_30s_sign") != 0))
+    signal_post10 = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("post_10s_sign") != 0))
     signal_late30 = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("late_30s_sign") != 0))
     signal_full = complete.filter((pl.col("early_10s_sign") != 0) & (pl.col("full_sign") != 0))
     n_signal_30s = signal_30s.height
+    n_signal_post10_30s = signal_post10_30s.height
+    n_signal_post10 = signal_post10.height
     n_signal_late30 = signal_late30.height
     n_signal_full = signal_full.height
     continue_30s = complete.filter(pl.col("early_10s_continues_to_30s")).height
     fade_30s = complete.filter(pl.col("early_10s_fades_to_30s")).height
+    continue_post10_30s = complete.filter(pl.col("early_10s_continues_to_post10_30s")).height
+    fade_post10_30s = complete.filter(pl.col("early_10s_fades_to_post10_30s")).height
+    continue_post10 = complete.filter(pl.col("early_10s_continues_to_post10")).height
+    fade_post10 = complete.filter(pl.col("early_10s_fades_to_post10")).height
     continue_late30 = complete.filter(pl.col("early_10s_continues_to_late30")).height
     fade_late30 = complete.filter(pl.col("early_10s_fades_to_late30")).height
     continue_full = complete.filter(pl.col("early_10s_continues_to_full")).height
@@ -314,6 +312,8 @@ def _base_summary_row(subset: pl.DataFrame, summary_type: str, candle: str, **la
         "n_complete_days": n_complete,
         "n_signal_days": n_signal_full,
         "n_signal_30s_days": n_signal_30s,
+        "n_signal_post10_30s_days": n_signal_post10_30s,
+        "n_signal_post10_days": n_signal_post10,
         "n_signal_late30_days": n_signal_late30,
         "n_signal_full_days": n_signal_full,
         "early_10s_positive_count": early_pos,
@@ -332,6 +332,14 @@ def _base_summary_row(subset: pl.DataFrame, summary_type: str, candle: str, **la
         "continue_to_30s_rate": _rate(continue_30s, n_signal_30s),
         "fade_to_30s_count": fade_30s,
         "fade_to_30s_rate": _rate(fade_30s, n_signal_30s),
+        "continue_to_post10_30s_count": continue_post10_30s,
+        "continue_to_post10_30s_rate": _rate(continue_post10_30s, n_signal_post10_30s),
+        "fade_to_post10_30s_count": fade_post10_30s,
+        "fade_to_post10_30s_rate": _rate(fade_post10_30s, n_signal_post10_30s),
+        "continue_to_post10_count": continue_post10,
+        "continue_to_post10_rate": _rate(continue_post10, n_signal_post10),
+        "fade_to_post10_count": fade_post10,
+        "fade_to_post10_rate": _rate(fade_post10, n_signal_post10),
         "continue_to_late30_count": continue_late30,
         "continue_to_late30_rate": _rate(continue_late30, n_signal_late30),
         "fade_to_late30_count": fade_late30,
