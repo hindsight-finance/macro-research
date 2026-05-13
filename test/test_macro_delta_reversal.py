@@ -172,6 +172,33 @@ def test_build_macro_delta_reversal_adds_signs_and_relationship_flags():
     assert day2["eth_pre_rth_has_signal"] is False
 
 
+def test_build_macro_delta_reversal_adds_primary_predictor_aliases():
+    globex = _globex_rows(
+        [
+            _g("2025-01-02", 0, 3, 6, 6),
+            _g("2025-01-02", 930, 7, 14, 14),
+        ]
+    )
+    macro = _macro_rows(
+        [
+            _m("2025-01-02", 50, -2, 4, 4),
+            _m("2025-01-02", 59, -5, 10, 10),
+        ]
+    )
+
+    out = build_macro_delta_reversal(globex, macro)
+    row = out.row(0, named=True)
+
+    assert row["eth_rth_pre59_volume_delta"] == row["day_pre_macro_volume_delta"] == 10
+    assert row["eth_rth_pre59_delta_imbalance"] == pytest.approx(row["day_pre_macro_delta_imbalance"])
+    assert row["eth_rth_macro_pre59_volume_delta"] == row["day_plus_macro_pre59_volume_delta"] == 8
+    assert row["rth_macro_pre59_volume_delta"] == row["rth_plus_macro_pre59_volume_delta"] == 5
+    assert row["eth_rth_pre59_sign"] == 1
+    assert row["eth_rth_macro_pre59_sign"] == 1
+    assert row["rth_macro_pre59_sign"] == 1
+    assert row["eth_rth_macro_pre59_opposes_k359"] is True
+
+
 def test_summarize_macro_delta_reversal_computes_predictor_statistics():
     globex = _globex_rows(
         [
@@ -246,7 +273,7 @@ def test_write_macro_delta_reversal_persists_study_and_summary(tmp_path: Path):
     summary = pl.read_parquet(summary_path)
     assert study.height == 1
     assert study.row(0, named=True)["rth_pre_macro_opposes_k359"] is True
-    assert summary.filter(pl.col("summary_type") == "sign").height == 6
+    assert summary.filter(pl.col("summary_type") == "sign").height == 9
 
 
 def test_write_macro_delta_reversal_requires_macro_5s_path_argument(tmp_path: Path):

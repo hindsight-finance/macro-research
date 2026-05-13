@@ -40,7 +40,18 @@ PREDICTORS = [
     "macro_pre59",
     "rth_plus_macro_pre59",
     "day_plus_macro_pre59",
+    "eth_rth_pre59",
+    "eth_rth_macro_pre59",
+    "rth_macro_pre59",
 ]
+
+PRIMARY_PREDICTOR_ALIASES = {
+    "eth_rth_pre59": "day_pre_macro",
+    "eth_rth_macro_pre59": "day_plus_macro_pre59",
+    "rth_macro_pre59": "rth_plus_macro_pre59",
+}
+
+PRIMARY_PREDICTORS = list(PRIMARY_PREDICTOR_ALIASES.keys())
 
 
 def _missing_columns(frame: pl.DataFrame, required: set[str]) -> list[str]:
@@ -131,6 +142,14 @@ def _sign_expr(column: str) -> pl.Expr:
     )
 
 
+def _add_primary_predictor_aliases(frame: pl.DataFrame) -> pl.DataFrame:
+    exprs: list[pl.Expr] = []
+    for alias, source in PRIMARY_PREDICTOR_ALIASES.items():
+        for suffix in ["volume_delta", "classified_size", "total_size", "delta_imbalance"]:
+            exprs.append(pl.col(f"{source}_{suffix}").alias(f"{alias}_{suffix}"))
+    return frame.with_columns(exprs)
+
+
 def _add_signs_and_relationships(frame: pl.DataFrame) -> pl.DataFrame:
     sign_names = [*PREDICTORS, "k359"]
     out = frame.with_columns([_sign_expr(f"{name}_volume_delta").alias(f"{name}_sign") for name in sign_names])
@@ -194,7 +213,8 @@ def build_macro_delta_reversal(
     )
     out = _add_combined_window(out, "rth_pre_macro", "macro_pre59", "rth_plus_macro_pre59")
     out = _add_combined_window(out, "day_pre_macro", "macro_pre59", "day_plus_macro_pre59")
-    return _add_signs_and_relationships(out.rename({"trade_date_et": "date"})).sort("date")
+    out = _add_primary_predictor_aliases(out.rename({"trade_date_et": "date"}))
+    return _add_signs_and_relationships(out).sort("date")
 
 
 def _rate(numer: int, denom: int) -> float | None:
