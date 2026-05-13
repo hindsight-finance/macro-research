@@ -2020,6 +2020,36 @@ def test_delta_dominance_quantiles_are_ranked_low_to_high():
     ]
 
 
+def test_try_enrich_delta_dominance_missing_path_preserves_events_with_null_delta_columns(tmp_path):
+    missing_path = tmp_path / "missing_delta.parquet"
+
+    with pytest.warns(RuntimeWarning, match="Skipping macro FVG volume-delta dominance"):
+        enriched = try_enrich_fvg_events_with_delta_dominance(
+            make_delta_events_for_dominance(),
+            missing_path,
+        )
+
+    assert enriched.height == 4
+    assert "aligned_delta_imbalance_quantile" in enriched.columns
+    assert enriched["aligned_delta_imbalance_quantile"].null_count() == 4
+    assert enriched["fvg_delta_imbalance"].null_count() == 4
+
+
+def test_load_macro_volume_delta_5s_requires_expected_columns(tmp_path):
+    bad_path = tmp_path / "bad_delta.parquet"
+    pl.DataFrame(
+        {
+            "trade_date_et": [datetime(2025, 1, 2).date()],
+            "date": [datetime(2025, 1, 2).date()],
+            "macro_bucket_index": [1],
+            "volume_delta": [10],
+        }
+    ).write_parquet(bad_path)
+
+    with pytest.raises(ValueError, match="Missing volume-delta columns"):
+        load_macro_volume_delta_5s(bad_path)
+
+
 def test_run_macro_fvg_study_writes_parquet_and_figures(tmp_path):
     input_path = tmp_path / "nq_1m.parquet"
     events_path = tmp_path / "nq_macro_fvg_events.parquet"
