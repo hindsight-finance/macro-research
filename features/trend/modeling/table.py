@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import time
 from pathlib import Path
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,7 @@ from features.trend.modeling.target import (
     build_containment_target,
     build_descriptive_target,
 )
-from features.trend.state_detector import ADXIndicator, DRAIndicator, IRRIndicator, MSSIndicator
+from features.trend.state_detector import ADXIndicator, DRAIndicator, IRRIndicator, MSSIndicator, StateDetector
 from features.trend.variance_ratio import analyze_variance_ratio
 
 
@@ -26,16 +27,19 @@ SESSION_WINDOWS = {
 }
 DEFAULT_SESSION_NAMES = tuple(SESSION_WINDOWS.keys())
 VR_LAG = 4
+MARKET_TZ = ZoneInfo("America/New_York")
 
 
 def _normalize_input_bars(bars: pd.DataFrame) -> pd.DataFrame:
-    timestamp_col = "timestamp" if "timestamp" in bars.columns else "DateTime_ET"
-    if timestamp_col not in bars.columns:
-        raise ValueError("Input bars must contain 'timestamp' or 'DateTime_ET'.")
+    if "datetime_utc" not in bars.columns:
+        raise ValueError("Input bars must contain canonical UTC timestamp column: datetime_utc.")
+
+    timestamp_utc = pd.to_datetime(bars["datetime_utc"], utc=True)
 
     normalized = pd.DataFrame(
         {
-            "timestamp": pd.to_datetime(bars[timestamp_col]),
+            "datetime_utc": timestamp_utc,
+            "timestamp": timestamp_utc.dt.tz_convert(MARKET_TZ),
             "open": bars["open"] if "open" in bars.columns else bars["Open"],
             "high": bars["high"] if "high" in bars.columns else bars["High"],
             "low": bars["low"] if "low" in bars.columns else bars["Low"],
@@ -121,13 +125,31 @@ def _compute_dra(window_bars: pd.DataFrame) -> float:
     return float(result.raw_value)
 
 
+def _compute_regime_features(window_bars: pd.DataFrame, session_name: str) -> dict:
+    result = StateDetector(dynamic_weights=True).detect(window_bars, session=session_name)
+    total_weight = sum(result.weights.values())
+    composite = (
+        sum(result.signals.get(name, 0.0) * weight for name, weight in result.weights.items()) / total_weight
+        if total_weight
+        else np.nan
+    )
+
+    return {
+        "regime_state": result.state,
+        "regime_direction": result.direction,
+        "regime_confidence": float(result.confidence),
+        "regime_signal_composite": float(composite),
+        "regime_status": "ok" if not result.warnings else ";".join(result.warnings),
+    }
+
+
 def _build_session_row(window_bars: pd.DataFrame, instrument: str, session_name: str) -> dict:
     row = {
         "instrument": instrument,
         "trade_date": window_bars["timestamp"].iloc[0].date(),
         "session_name": session_name,
-        "window_start_ts": window_bars["timestamp"].iloc[0],
-        "window_end_ts": window_bars["timestamp"].iloc[-1],
+        "window_start_ts": window_bars["datetime_utc"].iloc[0],
+        "window_end_ts": window_bars["datetime_utc"].iloc[-1],
         "n_bars_raw": int(len(window_bars)),
     }
     feature_errors: list[str] = []
@@ -177,6 +199,20 @@ def _build_session_row(window_bars: pd.DataFrame, instrument: str, session_name:
         row["dra"] = _compute_dra(window_bars)
     except Exception:
         row["dra"] = np.nan
+
+    try:
+        row.update(_compute_regime_features(window_bars, session_name))
+    except Exception as exc:
+        row.update(
+            {
+                "regime_state": "UNCERTAIN",
+                "regime_direction": "NEUTRAL",
+                "regime_confidence": 0.0,
+                "regime_signal_composite": np.nan,
+                "regime_status": f"error:{exc}",
+            }
+        )
+        feature_errors.append(f"regime:{exc}")
 
     try:
         row.update(

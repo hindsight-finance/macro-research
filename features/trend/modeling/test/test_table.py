@@ -4,8 +4,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+from zoneinfo import ZoneInfo
 
 from features.trend.modeling.table import build_modeling_table
+
+
+MARKET_TZ = ZoneInfo("America/New_York")
+UTC = ZoneInfo("UTC")
 
 
 def _make_intraday_bars(
@@ -39,11 +45,89 @@ def _make_intraday_bars(
     )
 
 
+def _make_utc_intraday_bars(trade_date: str, start_time_et: str, periods: int, drift: float = 0.05) -> pd.DataFrame:
+    timestamp_et = pd.date_range(
+        f"{trade_date} {start_time_et}",
+        periods=periods,
+        freq="min",
+        tz=MARKET_TZ,
+    )
+    timestamp_utc = timestamp_et.tz_convert(UTC)
+    base = 100.0 + np.arange(periods) * drift
+    wobble = 0.03 * np.sin(np.arange(periods) / 5.0)
+    open_ = base + wobble
+    close = base + drift + 0.03 * np.cos(np.arange(periods) / 5.0)
+    high = np.maximum(open_, close) + 0.15
+    low = np.minimum(open_, close) - 0.15
+
+    return pd.DataFrame(
+        {
+            "datetime_utc": timestamp_utc,
+            "Open": open_,
+            "High": high,
+            "Low": low,
+            "Close": close,
+            "Volume": 100,
+        }
+    )
+
+
+def test_build_modeling_table_requires_canonical_utc_timestamp_column(tmp_path: Path):
+    bars = _make_utc_intraday_bars("2024-01-02", "13:00", 120)
+    bars_path = tmp_path / "bars.parquet"
+    bars.to_parquet(bars_path, index=False)
+
+    table = build_modeling_table(
+        input_path=bars_path,
+        instrument="NQ",
+        session_names=["1pm-3pm"],
+    )
+
+    assert len(table) == 1
+    assert table["session_name"].iloc[0] == "1pm-3pm"
+    assert table["n_bars_raw"].iloc[0] == 120
+
+
+def test_build_modeling_table_rejects_files_without_canonical_utc_timestamp_column(tmp_path: Path):
+    bars = _make_intraday_bars("2024-01-02", "13:00", 120, session="PM", window="NONE")
+    bars_path = tmp_path / "bars.parquet"
+    bars.to_parquet(bars_path, index=False)
+
+    with pytest.raises(ValueError, match="datetime_utc"):
+        build_modeling_table(
+            input_path=bars_path,
+            instrument="NQ",
+            session_names=["1pm-3pm"],
+        )
+
+
+def test_build_modeling_table_uses_new_york_session_windows_from_utc_across_dst(tmp_path: Path):
+    bars = pd.concat(
+        [
+            _make_utc_intraday_bars("2024-03-08", "13:00", 120),
+            _make_utc_intraday_bars("2024-03-11", "13:00", 120),
+        ],
+        ignore_index=True,
+    )
+    bars_path = tmp_path / "bars.parquet"
+    bars.to_parquet(bars_path, index=False)
+
+    table = build_modeling_table(
+        input_path=bars_path,
+        instrument="NQ",
+        session_names=["1pm-3pm"],
+    )
+
+    assert len(table) == 2
+    assert set(table["n_bars_raw"]) == {120}
+    assert set(table["trade_date"].astype(str)) == {"2024-03-08", "2024-03-11"}
+
+
 def test_build_modeling_table_emits_one_row_per_date_and_session(tmp_path: Path):
     bars = pd.concat(
         [
-            _make_intraday_bars("2024-01-02", "13:00", 120, session="PM", window="NONE"),
-            _make_intraday_bars("2024-01-03", "13:00", 120, session="PM", window="NONE"),
+            _make_utc_intraday_bars("2024-01-02", "13:00", 120),
+            _make_utc_intraday_bars("2024-01-03", "13:00", 120),
         ],
         ignore_index=True,
     )
@@ -133,9 +217,9 @@ def test_build_modeling_table_emits_one_row_per_date_and_session(tmp_path: Path)
 def test_build_modeling_table_extracts_windows_from_timestamps_not_tags(tmp_path: Path):
     bars = pd.concat(
         [
-            _make_intraday_bars("2024-01-02", "13:00", 120, session="OTHER", window="NONE"),
-            _make_intraday_bars("2024-01-02", "15:00", 50, session="OTHER", window="NONE"),
-            _make_intraday_bars("2024-01-02", "15:50", 10, session="OTHER", window="NONE"),
+            _make_utc_intraday_bars("2024-01-02", "13:00", 120),
+            _make_utc_intraday_bars("2024-01-02", "15:00", 50),
+            _make_utc_intraday_bars("2024-01-02", "15:50", 10),
         ],
         ignore_index=True,
     )
@@ -156,3 +240,29 @@ def test_build_modeling_table_extracts_windows_from_timestamps_not_tags(tmp_path
         "3pm-3:50pm": 50,
         "3:50pm-4pm": 10,
     }
+
+
+def test_build_modeling_table_emits_state_detector_regime_columns(tmp_path: Path):
+    bars = _make_utc_intraday_bars("2024-01-02", "13:00", 120)
+    bars_path = tmp_path / "bars.parquet"
+    bars.to_parquet(bars_path, index=False)
+
+    table = build_modeling_table(
+        input_path=bars_path,
+        instrument="NQ",
+        session_names=["1pm-3pm"],
+    )
+
+    row = table.iloc[0]
+    assert {
+        "regime_state",
+        "regime_direction",
+        "regime_confidence",
+        "regime_signal_composite",
+        "regime_status",
+    } <= set(table.columns)
+    assert row["regime_state"] in {"STRONG_TREND", "WEAK_TREND", "CONSOLIDATION", "CHOPPY", "UNCERTAIN"}
+    assert row["regime_direction"] in {"UP", "DOWN", "NEUTRAL"}
+    assert 0.0 <= row["regime_confidence"] <= 1.0
+    assert 0.0 <= row["regime_signal_composite"] <= 1.0
+    assert row["regime_status"] == "ok"
