@@ -134,3 +134,55 @@ def test_build_macro_bucket_path_counts_sign_flips_through_zero_and_nulls_zero_s
     assert zero_row["peak_abs_cum_bucket_index"] is None
     assert zero_row["max_favorable_cum_delta"] is None
     assert zero_row["max_adverse_cum_delta"] is None
+
+
+def test_build_macro_bucket_path_adds_per_candle_deciles_and_categories():
+    rows = []
+    for i in range(20):
+        day = f"2025-01-{i + 1:02d}"
+        k350_early = i - 10
+        k359_early = (i - 10) * 10
+        rows += _complete_candle(day, 0, [k350_early, 0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5])
+        rows += _complete_candle(day, 108, [k359_early, 0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5])
+
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    k350 = out.filter(pl.col("candle") == "k350")
+    k359 = out.filter(pl.col("candle") == "k359")
+    assert set(k350["early_10s_raw_decile"].drop_nulls().unique().to_list()) == set(range(1, 11))
+    assert set(k359["early_10s_raw_decile"].drop_nulls().unique().to_list()) == set(range(1, 11))
+    assert k350.filter(pl.col("early_10s_raw_decile") <= 2)["early_10s_category"].unique().to_list() == ["strong_negative"]
+    assert k350.filter(pl.col("early_10s_raw_decile") >= 9)["early_10s_category"].unique().to_list() == ["strong_positive"]
+    assert set(k350["early_10s_abs_category"].drop_nulls().unique().to_list()) == {
+        "low_abs_conviction",
+        "mid_abs_conviction",
+        "high_abs_conviction",
+    }
+
+
+def test_build_macro_bucket_path_skips_deciles_when_too_few_unique_values_and_falls_back_categories():
+    rows = []
+    for i in range(20):
+        day = f"2025-02-{i + 1:02d}"
+        rows += _complete_candle(day, 0, [5, 0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5])
+    rows += _complete_candle("2025-03-01", 0, [0] * 12)
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    assert out["early_10s_raw_decile"].null_count() == out.height
+    assert out["early_10s_imbalance_decile"].null_count() == out.height
+    assert out["early_10s_abs_decile"].null_count() == out.height
+    assert out.filter(pl.col("early_10s_sign") > 0)["early_10s_category"].unique().to_list() == ["weak_positive"]
+    assert out.filter(pl.col("early_10s_sign") == 0)["early_10s_category"].unique().to_list() == ["neutral"]
+
+
+def test_build_macro_bucket_path_deciles_ignore_nulls_and_keep_null_rows_null():
+    rows = []
+    for i in range(10):
+        rows += _complete_candle(f"2025-04-{i + 1:02d}", 0, [i + 1, 0, 1, -1, 0, 0, 0, 0, 0, 0, 0, 0])
+    # Incomplete row missing early buckets yields null early_10s window components? no; absent buckets fill 0, so use null delta.
+    rows.append(_s("2025-04-20", 0, None, 0, 0))
+    out = build_macro_bucket_path(_macro_5s_rows(rows))
+
+    null_row = out.filter(pl.col("date") == pl.date(2025, 4, 20)).row(0, named=True)
+    assert null_row["early_10s_raw_decile"] is None
+    assert set(out.filter(pl.col("date") != pl.date(2025, 4, 20))["early_10s_raw_decile"].to_list()) == set(range(1, 11))

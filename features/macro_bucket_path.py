@@ -51,13 +51,16 @@ def _sign_expr(column: str) -> pl.Expr:
 
 
 def _add_window_columns(frame: pl.DataFrame, prefix: str, start: int, end: int) -> pl.DataFrame:
-    delta_cols = [pl.col(f"b{bucket}_volume_delta").fill_null(0) for bucket in range(start, end + 1)]
-    classified_cols = [pl.col(f"b{bucket}_classified_size").fill_null(0) for bucket in range(start, end + 1)]
-    total_cols = [pl.col(f"b{bucket}_total_size").fill_null(0) for bucket in range(start, end + 1)]
+    delta_cols = [pl.col(f"b{bucket}_volume_delta") for bucket in range(start, end + 1)]
+    classified_cols = [pl.col(f"b{bucket}_classified_size") for bucket in range(start, end + 1)]
+    total_cols = [pl.col(f"b{bucket}_total_size") for bucket in range(start, end + 1)]
+    delta_present = pl.sum_horizontal([col.is_not_null().cast(pl.Int64) for col in delta_cols])
+    classified_present = pl.sum_horizontal([col.is_not_null().cast(pl.Int64) for col in classified_cols])
+    total_present = pl.sum_horizontal([col.is_not_null().cast(pl.Int64) for col in total_cols])
     return frame.with_columns(
-        pl.sum_horizontal(delta_cols).alias(f"{prefix}_volume_delta"),
-        pl.sum_horizontal(classified_cols).alias(f"{prefix}_classified_size"),
-        pl.sum_horizontal(total_cols).alias(f"{prefix}_total_size"),
+        pl.when(delta_present > 0).then(pl.sum_horizontal(delta_cols)).otherwise(None).alias(f"{prefix}_volume_delta"),
+        pl.when(classified_present > 0).then(pl.sum_horizontal(classified_cols)).otherwise(None).alias(f"{prefix}_classified_size"),
+        pl.when(total_present > 0).then(pl.sum_horizontal(total_cols)).otherwise(None).alias(f"{prefix}_total_size"),
     ).with_columns(
         _safe_ratio_expr(pl.col(f"{prefix}_volume_delta"), pl.col(f"{prefix}_classified_size")).alias(
             f"{prefix}_delta_imbalance"
@@ -181,10 +184,88 @@ def _build_candle_rows(macro_5s: pl.DataFrame, candle: str, start: int, end: int
     return _add_continuation_flags(out)
 
 
+def _sum_preserve_all_null(column: str) -> pl.Expr:
+    return pl.when(pl.col(column).null_count() == pl.len()).then(None).otherwise(pl.col(column).sum()).alias(column)
+
+
+def _aggregate_duplicate_buckets(macro_5s: pl.DataFrame) -> pl.DataFrame:
+    return macro_5s.group_by("trade_date_et", "macro_bucket_index", maintain_order=True).agg(
+        _sum_preserve_all_null("volume_delta"),
+        _sum_preserve_all_null("classified_size"),
+        _sum_preserve_all_null("total_size"),
+    )
+
+
+def _decile_values_for_column(frame: pl.DataFrame, value_col: str, output_col: str) -> pl.DataFrame:
+    parts: list[pl.DataFrame] = []
+    for candle in CANDLE_SPECS:
+        subset = frame.filter((pl.col("candle") == candle) & pl.col(value_col).is_not_null()).select(
+            "date", "candle", value_col
+        )
+        unique_count = subset.select(pl.col(value_col).n_unique()).item() if subset.height else 0
+        if subset.height < 10 or unique_count < 10:
+            values = frame.filter(pl.col("candle") == candle).select("date", "candle").with_columns(
+                pl.lit(None, dtype=pl.Int64).alias(output_col)
+            )
+        else:
+            values = (
+                subset.sort([value_col, "date"])
+                .with_row_index("_rank0")
+                .with_columns(((pl.col("_rank0") * 10 / pl.len()).floor().cast(pl.Int64).clip(0, 9) + 1).alias(output_col))
+                .select("date", "candle", output_col)
+            )
+            missing = frame.filter((pl.col("candle") == candle) & pl.col(value_col).is_null()).select("date", "candle").with_columns(
+                pl.lit(None, dtype=pl.Int64).alias(output_col)
+            )
+            values = pl.concat([values, missing], how="vertical")
+        parts.append(values)
+    return pl.concat(parts, how="vertical") if parts else pl.DataFrame({"date": [], "candle": [], output_col: []})
+
+
+def _add_conviction_categories(frame: pl.DataFrame) -> pl.DataFrame:
+    out = frame.with_columns(pl.col("early_10s_volume_delta").abs().alias("early_10s_abs_delta"))
+    for value_col, output_col in [
+        ("early_10s_volume_delta", "early_10s_raw_decile"),
+        ("early_10s_delta_imbalance", "early_10s_imbalance_decile"),
+        ("early_10s_abs_delta", "early_10s_abs_decile"),
+    ]:
+        out = out.join(_decile_values_for_column(out, value_col, output_col), on=["date", "candle"], how="left")
+    return out.with_columns(
+        pl.when(pl.col("early_10s_sign") == 0)
+        .then(pl.lit("neutral"))
+        .when(pl.col("early_10s_raw_decile").is_in([1, 2]))
+        .then(pl.lit("strong_negative"))
+        .when(pl.col("early_10s_raw_decile").is_in([3, 4]))
+        .then(pl.lit("weak_negative"))
+        .when(pl.col("early_10s_raw_decile").is_in([5, 6]))
+        .then(pl.lit("neutral"))
+        .when(pl.col("early_10s_raw_decile").is_in([7, 8]))
+        .then(pl.lit("weak_positive"))
+        .when(pl.col("early_10s_raw_decile").is_in([9, 10]))
+        .then(pl.lit("strong_positive"))
+        .when(pl.col("early_10s_sign") < 0)
+        .then(pl.lit("weak_negative"))
+        .when(pl.col("early_10s_sign") > 0)
+        .then(pl.lit("weak_positive"))
+        .otherwise(None)
+        .alias("early_10s_category"),
+        pl.when(pl.col("early_10s_abs_decile").is_in([9, 10]))
+        .then(pl.lit("high_abs_conviction"))
+        .when(pl.col("early_10s_abs_decile").is_between(4, 8))
+        .then(pl.lit("mid_abs_conviction"))
+        .when(pl.col("early_10s_abs_decile").is_between(1, 3))
+        .then(pl.lit("low_abs_conviction"))
+        .otherwise(None)
+        .alias("early_10s_abs_category"),
+    )
+
+
 def build_macro_bucket_path(macro_5s: pl.DataFrame) -> pl.DataFrame:
     _validate_inputs(macro_5s)
+    macro_5s = _aggregate_duplicate_buckets(macro_5s)
     frames = [_build_candle_rows(macro_5s, candle, start, end) for candle, (start, end) in CANDLE_SPECS.items()]
-    return pl.concat(frames, how="diagonal_relaxed").sort(["date", "candle"])
+    out = pl.concat(frames, how="diagonal_relaxed").sort(["date", "candle"])
+    return _add_conviction_categories(out)
 
 
 def summarize_macro_bucket_path(study: pl.DataFrame) -> pl.DataFrame:
