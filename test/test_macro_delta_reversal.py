@@ -199,6 +199,45 @@ def test_build_macro_delta_reversal_adds_primary_predictor_aliases():
     assert row["eth_rth_macro_pre59_opposes_k359"] is True
 
 
+def test_build_macro_delta_reversal_aggregates_359_5s_target_windows():
+    globex = _globex_rows([_g("2025-01-02", 930, 10, 20, 20)])
+    macro = _macro_rows([_m("2025-01-02", 59, -12, 24, 24)])
+    macro_5s = _macro_5s_rows(
+        [
+            _s("2025-01-02", 107, 999, 999, 999),
+            _s("2025-01-02", 108, 1, 2, 2),
+            _s("2025-01-02", 109, 2, 4, 4),
+            _s("2025-01-02", 110, -1, 2, 3),
+            _s("2025-01-02", 111, -2, 4, 5),
+            _s("2025-01-02", 112, 3, 6, 6),
+            _s("2025-01-02", 113, -3, 6, 6),
+            _s("2025-01-02", 114, -4, 8, 8),
+            _s("2025-01-02", 115, -5, 10, 10),
+            _s("2025-01-02", 116, -6, 12, 12),
+            _s("2025-01-02", 117, -7, 14, 14),
+            _s("2025-01-02", 118, -8, 16, 16),
+            _s("2025-01-02", 119, -9, 18, 18),
+        ]
+    )
+
+    out = build_macro_delta_reversal(globex, macro, macro_5s)
+    row = out.row(0, named=True)
+
+    assert row["k359_00_59_volume_delta"] == -39
+    assert row["k359_00_59_classified_size"] == 102
+    assert row["k359_00_59_total_size"] == 104
+    assert row["k359_00_59_delta_imbalance"] == pytest.approx(-39 / 102)
+    assert row["k359_00_59_sign"] == -1
+    assert row["k359_00_29_volume_delta"] == 0
+    assert row["k359_00_29_sign"] == 0
+    assert row["k359_30_59_volume_delta"] == -39
+    assert row["k359_45_59_volume_delta"] == -24
+    assert row["k359_50_59_volume_delta"] == -17
+    assert row["k359_bucket_108_volume_delta"] == 1
+    assert row["k359_bucket_119_volume_delta"] == -9
+    assert "k359_bucket_107_volume_delta" not in out.columns
+
+
 def test_summarize_macro_delta_reversal_computes_predictor_statistics():
     globex = _globex_rows(
         [

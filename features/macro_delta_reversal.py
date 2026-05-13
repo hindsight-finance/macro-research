@@ -53,6 +53,16 @@ PRIMARY_PREDICTOR_ALIASES = {
 
 PRIMARY_PREDICTORS = list(PRIMARY_PREDICTOR_ALIASES.keys())
 
+TARGET_WINDOWS_5S = {
+    "k359_00_59": (108, 119),
+    "k359_00_29": (108, 113),
+    "k359_30_59": (114, 119),
+    "k359_45_59": (117, 119),
+    "k359_50_59": (118, 119),
+}
+
+TARGET_WINDOWS = ["k359", *TARGET_WINDOWS_5S.keys(), *[f"k359_bucket_{bucket}" for bucket in range(108, 120)]]
+
 
 def _missing_columns(frame: pl.DataFrame, required: set[str]) -> list[str]:
     return sorted(required.difference(frame.columns))
@@ -150,8 +160,39 @@ def _add_primary_predictor_aliases(frame: pl.DataFrame) -> pl.DataFrame:
     return frame.with_columns(exprs)
 
 
+def _aggregate_target_window_5s(macro_5s: pl.DataFrame, start: int, end: int, prefix: str) -> pl.DataFrame:
+    return (
+        macro_5s.filter(pl.col("macro_bucket_index").is_between(start, end))
+        .group_by("trade_date_et")
+        .agg(
+            pl.col("volume_delta").sum().alias(f"{prefix}_volume_delta"),
+            pl.col("classified_size").sum().alias(f"{prefix}_classified_size"),
+            pl.col("total_size").sum().alias(f"{prefix}_total_size"),
+        )
+        .with_columns(
+            _safe_ratio_expr(pl.col(f"{prefix}_volume_delta"), pl.col(f"{prefix}_classified_size")).alias(
+                f"{prefix}_delta_imbalance"
+            )
+        )
+    )
+
+
+def _join_359_5s_targets(frame: pl.DataFrame, macro_5s: pl.DataFrame | None) -> pl.DataFrame:
+    if macro_5s is None:
+        return frame
+
+    out = frame
+    for prefix, (start, end) in TARGET_WINDOWS_5S.items():
+        out = out.join(_aggregate_target_window_5s(macro_5s, start, end, prefix), on="trade_date_et", how="left")
+    for bucket in range(108, 120):
+        prefix = f"k359_bucket_{bucket}"
+        out = out.join(_aggregate_target_window_5s(macro_5s, bucket, bucket, prefix), on="trade_date_et", how="left")
+    return out
+
+
 def _add_signs_and_relationships(frame: pl.DataFrame) -> pl.DataFrame:
-    sign_names = [*PREDICTORS, "k359"]
+    target_names = [target for target in TARGET_WINDOWS if f"{target}_volume_delta" in frame.columns]
+    sign_names = [*PREDICTORS, *target_names]
     out = frame.with_columns([_sign_expr(f"{name}_volume_delta").alias(f"{name}_sign") for name in sign_names])
 
     relationship_exprs: list[pl.Expr] = []
@@ -213,6 +254,7 @@ def build_macro_delta_reversal(
     )
     out = _add_combined_window(out, "rth_pre_macro", "macro_pre59", "rth_plus_macro_pre59")
     out = _add_combined_window(out, "day_pre_macro", "macro_pre59", "day_plus_macro_pre59")
+    out = _join_359_5s_targets(out, macro_5s)
     out = _add_primary_predictor_aliases(out.rename({"trade_date_et": "date"}))
     return _add_signs_and_relationships(out).sort("date")
 
