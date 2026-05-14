@@ -21,12 +21,17 @@ def _t(ts: str, rank: int, price_ticks: int) -> dict:
     return {"ts_event": ts, "intra_ts_rank": rank, "price_ticks": price_ticks}
 
 
+def _fill_middle_minutes(day: str = "2025-01-02", hour: str = "20", price_ticks: int = 400) -> list[dict]:
+    return [_t(f"{day}T{hour}:{minute:02d}:00Z", 0, price_ticks) for minute in range(51, 59)]
+
+
 def _basic_macro_ticks() -> pl.DataFrame:
     return _ticks(
         [
             _t("2025-01-02T20:50:00Z", 0, 10000),
             _t("2025-01-02T20:50:09Z", 0, 10020),
             _t("2025-01-02T20:50:59Z", 0, 10040),
+            *_fill_middle_minutes("2025-01-02", "20", 10020),
             _t("2025-01-02T20:59:00Z", 0, 10010),
             _t("2025-01-02T20:59:09Z", 0, 10050),
             _t("2025-01-02T20:59:59Z", 0, 10030),
@@ -64,6 +69,7 @@ def test_build_macro_tick_range_context_computes_first10_percentages_and_additiv
             _t("2025-01-02T20:50:09Z", 0, 396),  # 99 first10 range 3
             _t("2025-01-02T20:50:30Z", 0, 416),  # 104 candle high
             _t("2025-01-02T20:50:59Z", 0, 388),  # 97 candle low/range 7
+            *_fill_middle_minutes("2025-01-02", "20", 400),
             _t("2025-01-02T20:59:00Z", 0, 392),  # 98
             _t("2025-01-02T20:59:09Z", 0, 420),  # 105
             _t("2025-01-02T20:59:59Z", 0, 384),  # 96 macro low/range 9
@@ -94,6 +100,7 @@ def test_build_macro_tick_range_context_computes_k359_macro_contribution_from_pr
         [
             _t("2025-01-02T20:50:00Z", 0, 400),  # 100 pre low
             _t("2025-01-02T20:58:59Z", 0, 420),  # 105 pre high
+            *_fill_middle_minutes("2025-01-02", "20", 408),
             _t("2025-01-02T20:59:00Z", 0, 416),
             _t("2025-01-02T20:59:10Z", 0, 428),  # 107 high -> +2
             _t("2025-01-02T20:59:59Z", 0, 392),  # 98 low -> +2
@@ -114,6 +121,7 @@ def test_build_macro_tick_range_context_excludes_incomplete_days():
     ticks = _ticks(
         [
             _t("2025-01-02T20:50:00Z", 0, 400),
+            *_fill_middle_minutes("2025-01-02", "20", 402),
             _t("2025-01-02T20:59:00Z", 0, 404),
             _t("2025-01-03T20:50:00Z", 0, 400),
             _t("2025-01-03T20:50:10Z", 0, 404),
@@ -125,6 +133,54 @@ def test_build_macro_tick_range_context_excludes_incomplete_days():
     assert out["date"].unique().to_list() == [date(2025, 1, 2)]
 
 
+def test_build_macro_tick_range_context_excludes_day_missing_middle_macro_minute():
+    rows = [
+        _t("2025-01-02T20:50:00Z", 0, 400),
+        *[_t(f"2025-01-02T20:{minute:02d}:00Z", 0, 404) for minute in range(51, 60) if minute != 55],
+    ]
+
+    out = build_macro_tick_range_context(_ticks(rows))
+
+    assert out.is_empty()
+
+
+def test_build_macro_tick_range_context_empty_result_has_stable_schema():
+    ticks = _ticks([_t("2025-01-02T20:50:00Z", 0, 400), _t("2025-01-02T20:59:00Z", 0, 404)])
+
+    study = build_macro_tick_range_context(ticks)
+    summary = summarize_macro_tick_range_context(study)
+
+    assert study.is_empty()
+    assert {
+        "date",
+        "candle",
+        "window",
+        "window_range_points",
+        "candle_range_points",
+        "macro_range_points",
+        "k359_macro_additive_total_extension_from_pre359_pct_of_macro",
+    }.issubset(study.columns)
+    assert summary.is_empty()
+    assert {
+        "summary_type",
+        "candle",
+        "window",
+        "threshold",
+        "n_days",
+        "median_metric",
+        "decile",
+    }.issubset(summary.columns)
+
+
+def test_build_macro_tick_range_context_lazy_matches_dataframe_fixture():
+    ticks = _basic_macro_ticks()
+
+    eager = build_macro_tick_range_context(ticks)
+    lazy = build_macro_tick_range_context(ticks.lazy())
+
+    assert lazy.equals(eager)
+
+
 def test_open_close_use_ts_event_then_rank_tiebreak():
     ticks = _ticks(
         [
@@ -132,6 +188,7 @@ def test_open_close_use_ts_event_then_rank_tiebreak():
             _t("2025-01-02T20:50:00Z", 0, 400),
             _t("2025-01-02T20:50:59Z", 0, 404),
             _t("2025-01-02T20:50:59Z", 1, 412),
+            *_fill_middle_minutes("2025-01-02", "20", 408),
             _t("2025-01-02T20:59:00Z", 0, 416),
             _t("2025-01-02T20:59:59Z", 0, 420),
         ]
@@ -149,6 +206,7 @@ def test_dst_july_1550_et_maps_to_1950_utc():
         [
             _t("2025-07-02T19:50:00Z", 0, 400),
             _t("2025-07-02T19:50:09Z", 0, 404),
+            *_fill_middle_minutes("2025-07-02", "19", 408),
             _t("2025-07-02T19:59:00Z", 0, 408),
             _t("2025-07-02T19:59:59Z", 0, 412),
         ]
@@ -167,6 +225,7 @@ def test_first10_includes_subsecond_09_999999999_excludes_10_000000000():
             _t("2025-01-02T20:50:09.999999999Z", 0, 420),
             _t("2025-01-02T20:50:10Z", 0, 440),
             _t("2025-01-02T20:50:59Z", 0, 404),
+            *_fill_middle_minutes("2025-01-02", "20", 408),
             _t("2025-01-02T20:59:00Z", 0, 408),
             _t("2025-01-02T20:59:59Z", 0, 412),
         ]
@@ -189,6 +248,7 @@ def test_summarize_macro_tick_range_context_adds_threshold_and_decile_rows():
                 _t(f"{day}T20:50:00Z", 0, base),
                 _t(f"{day}T20:50:09Z", 0, base + 4 * (i + 1)),
                 _t(f"{day}T20:50:59Z", 0, base + 80),
+                *_fill_middle_minutes(day, "20", base + 40),
                 _t(f"{day}T20:59:00Z", 0, base + 20),
                 _t(f"{day}T20:59:59Z", 0, base + 100),
             ]
@@ -231,6 +291,7 @@ def test_baseline_summary_n_days_counts_non_null_window_metric_only():
         [
             _t("2025-01-02T20:50:10Z", 0, 400),
             _t("2025-01-02T20:50:59Z", 0, 404),
+            *_fill_middle_minutes("2025-01-02", "20", 408),
             _t("2025-01-02T20:59:00Z", 0, 408),
             _t("2025-01-02T20:59:59Z", 0, 412),
         ]

@@ -24,6 +24,73 @@ NAMED_WINDOWS = {
 }
 THRESHOLDS = [25.0, 50.0, 75.0, 90.0]
 
+STUDY_SCHEMA = {
+    "date": pl.Date,
+    "candle": pl.Utf8,
+    "window": pl.Utf8,
+    "window_start_second": pl.Int64,
+    "window_end_second": pl.Int64,
+    "window_tick_count": pl.Int64,
+    "window_open": pl.Float64,
+    "window_high": pl.Float64,
+    "window_low": pl.Float64,
+    "window_close": pl.Float64,
+    "window_range_points": pl.Float64,
+    "candle_tick_count": pl.Int64,
+    "candle_open": pl.Float64,
+    "candle_high": pl.Float64,
+    "candle_low": pl.Float64,
+    "candle_close": pl.Float64,
+    "candle_range_points": pl.Float64,
+    "macro_tick_count": pl.Int64,
+    "macro_open": pl.Float64,
+    "macro_high": pl.Float64,
+    "macro_low": pl.Float64,
+    "macro_close": pl.Float64,
+    "macro_range_points": pl.Float64,
+    "range_raw_pct_of_open": pl.Float64,
+    "range_pct_of_candle": pl.Float64,
+    "range_pct_of_macro": pl.Float64,
+    "candle_additive_high_extension_points": pl.Float64,
+    "candle_additive_low_extension_points": pl.Float64,
+    "candle_additive_total_extension_points": pl.Float64,
+    "macro_additive_high_extension_points": pl.Float64,
+    "macro_additive_low_extension_points": pl.Float64,
+    "macro_additive_total_extension_points": pl.Float64,
+    "candle_additive_total_extension_pct_of_candle": pl.Float64,
+    "macro_additive_total_extension_pct_of_macro": pl.Float64,
+    "k359_range_pct_of_macro": pl.Float64,
+    "k359_macro_additive_high_extension_from_pre359_points": pl.Float64,
+    "k359_macro_additive_low_extension_from_pre359_points": pl.Float64,
+    "k359_macro_additive_total_extension_from_pre359_points": pl.Float64,
+    "k359_macro_additive_total_extension_from_pre359_pct_of_macro": pl.Float64,
+}
+
+SUMMARY_SCHEMA = {
+    "summary_type": pl.Utf8,
+    "candle": pl.Utf8,
+    "window": pl.Utf8,
+    "n_days": pl.Int64,
+    "median_range_points": pl.Float64,
+    "mean_range_points": pl.Float64,
+    "median_range_raw_pct_of_open": pl.Float64,
+    "mean_range_raw_pct_of_open": pl.Float64,
+    "median_range_pct_of_candle": pl.Float64,
+    "mean_range_pct_of_candle": pl.Float64,
+    "median_range_pct_of_macro": pl.Float64,
+    "mean_range_pct_of_macro": pl.Float64,
+    "median_candle_additive_total_extension_points": pl.Float64,
+    "median_macro_additive_total_extension_points": pl.Float64,
+    "median_k359_macro_additive_total_extension_from_pre359_points": pl.Float64,
+    "threshold": pl.Float64,
+    "hit_count": pl.Int64,
+    "hit_rate": pl.Float64,
+    "median_metric": pl.Float64,
+    "decile_metric": pl.Utf8,
+    "decile": pl.Int64,
+}
+
+
 
 def _columns(frame: pl.DataFrame | pl.LazyFrame | pl.Schema) -> list[str]:
     if isinstance(frame, pl.Schema):
@@ -43,17 +110,26 @@ def _validate_tick_columns(frame: pl.DataFrame | pl.LazyFrame | pl.Schema) -> No
         raise ValueError(f"Missing tick columns: {missing}")
 
 
-def _prepare_ticks(ticks: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
+def _empty_study_frame() -> pl.DataFrame:
+    return pl.DataFrame(schema=STUDY_SCHEMA)
+
+
+def _empty_summary_frame() -> pl.DataFrame:
+    return pl.DataFrame(schema=SUMMARY_SCHEMA)
+
+
+def _prepare_ticks(ticks: pl.DataFrame | pl.LazyFrame) -> pl.LazyFrame:
     _validate_tick_columns(ticks)
-    ts_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ)
-    selected = ticks.select("ts_event", "intra_ts_rank", "price_ticks")
-    prepared = (
-        selected.with_columns(
-            pl.col("ts_event").cast(pl.Datetime("ns", time_zone="UTC")),
+    lazy = ticks.lazy() if isinstance(ticks, pl.DataFrame) else ticks
+    ts_utc = pl.col("ts_event").cast(pl.Datetime("ns", time_zone="UTC"))
+    return (
+        lazy.select("ts_event", "intra_ts_rank", "price_ticks")
+        .with_columns(
+            ts_utc.alias("ts_event"),
             pl.col("intra_ts_rank").cast(pl.Int64),
-            price=pl.col("price_ticks").cast(pl.Float64) / TICK_PRICE_DENOMINATOR,
+            (pl.col("price_ticks").cast(pl.Float64) / TICK_PRICE_DENOMINATOR).alias("price"),
         )
-        .with_columns(datetime_et=ts_et)
+        .with_columns(datetime_et=pl.col("ts_event").dt.convert_time_zone(MARKET_TZ))
         .with_columns(
             date=pl.col("datetime_et").dt.date(),
             hour_et=pl.col("datetime_et").dt.hour(),
@@ -61,11 +137,143 @@ def _prepare_ticks(ticks: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
             second_et=pl.col("datetime_et").dt.second(),
         )
         .filter((pl.col("hour_et") == 15) & pl.col("minute_et").is_between(50, 59))
-        .sort(["date", "ts_event", "intra_ts_rank"])
     )
-    if isinstance(prepared, pl.LazyFrame):
-        return prepared.collect(engine="streaming")
-    return prepared
+
+
+def _range_exprs(prefix: str) -> list[pl.Expr]:
+    return [
+        pl.len().cast(pl.Int64).alias(f"{prefix}_tick_count"),
+        pl.col("price").first().alias(f"{prefix}_open"),
+        pl.col("price").max().alias(f"{prefix}_high"),
+        pl.col("price").min().alias(f"{prefix}_low"),
+        pl.col("price").last().alias(f"{prefix}_close"),
+        (pl.col("price").max() - pl.col("price").min()).alias(f"{prefix}_range_points"),
+    ]
+
+
+def _complete_dates(work: pl.LazyFrame) -> pl.LazyFrame:
+    return (
+        work.group_by("date")
+        .agg(pl.col("minute_et").n_unique().alias("macro_minute_count"))
+        .filter(pl.col("macro_minute_count") == 10)
+        .select("date")
+    )
+
+
+def _candle_window_grid() -> pl.DataFrame:
+    rows = []
+    all_windows = {**WINDOW_SPECS, **NAMED_WINDOWS}
+    for candle, minute in CANDLE_SPECS.items():
+        for window, (start_second, end_second) in all_windows.items():
+            rows.append(
+                {
+                    "candle": candle,
+                    "minute_et": minute,
+                    "window": window,
+                    "window_start_second": start_second,
+                    "window_end_second": end_second,
+                }
+            )
+    return pl.DataFrame(rows)
+
+
+def _pct_expr(numer: str, denom: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(numer).is_not_null() & pl.col(denom).is_not_null() & (pl.col(denom) != 0))
+        .then(pl.col(numer) / pl.col(denom) * 100.0)
+        .otherwise(None)
+    )
+
+
+def _all_not_null(*cols: str) -> pl.Expr:
+    return pl.all_horizontal([pl.col(col).is_not_null() for col in cols])
+
+
+def _add_lazy_metrics(frame: pl.LazyFrame) -> pl.LazyFrame:
+    return (
+        frame.with_columns(
+            _pct_expr("window_range_points", "candle_open").alias("range_raw_pct_of_open"),
+            _pct_expr("window_range_points", "candle_range_points").alias("range_pct_of_candle"),
+            _pct_expr("window_range_points", "macro_range_points").alias("range_pct_of_macro"),
+            pl.when(_all_not_null("window_high", "candle_high"))
+            .then((pl.col("candle_high") - pl.col("window_high")).clip(0.0))
+            .otherwise(None)
+            .alias("candle_additive_high_extension_points"),
+            pl.when(_all_not_null("window_low", "candle_low"))
+            .then((pl.col("window_low") - pl.col("candle_low")).clip(0.0))
+            .otherwise(None)
+            .alias("candle_additive_low_extension_points"),
+            pl.when(_all_not_null("window_high", "macro_high"))
+            .then((pl.col("macro_high") - pl.col("window_high")).clip(0.0))
+            .otherwise(None)
+            .alias("macro_additive_high_extension_points"),
+            pl.when(_all_not_null("window_low", "macro_low"))
+            .then((pl.col("window_low") - pl.col("macro_low")).clip(0.0))
+            .otherwise(None)
+            .alias("macro_additive_low_extension_points"),
+        )
+        .with_columns(
+            (
+                pl.col("candle_additive_high_extension_points")
+                + pl.col("candle_additive_low_extension_points")
+            ).alias("candle_additive_total_extension_points"),
+            (
+                pl.col("macro_additive_high_extension_points")
+                + pl.col("macro_additive_low_extension_points")
+            ).alias("macro_additive_total_extension_points"),
+        )
+        .with_columns(
+            _pct_expr("candle_additive_total_extension_points", "candle_range_points").alias(
+                "candle_additive_total_extension_pct_of_candle"
+            ),
+            _pct_expr("macro_additive_total_extension_points", "macro_range_points").alias(
+                "macro_additive_total_extension_pct_of_macro"
+            ),
+            pl.when(pl.col("candle") == "k359")
+            .then(_pct_expr("candle_range_points", "macro_range_points"))
+            .otherwise(None)
+            .alias("k359_range_pct_of_macro"),
+            pl.when((pl.col("candle") == "k359") & _all_not_null("candle_high", "pre359_high"))
+            .then((pl.col("candle_high") - pl.col("pre359_high")).clip(0.0))
+            .otherwise(None)
+            .alias("k359_macro_additive_high_extension_from_pre359_points"),
+            pl.when((pl.col("candle") == "k359") & _all_not_null("candle_low", "pre359_low"))
+            .then((pl.col("pre359_low") - pl.col("candle_low")).clip(0.0))
+            .otherwise(None)
+            .alias("k359_macro_additive_low_extension_from_pre359_points"),
+        )
+        .with_columns(
+            (
+                pl.col("k359_macro_additive_high_extension_from_pre359_points")
+                + pl.col("k359_macro_additive_low_extension_from_pre359_points")
+            ).alias("k359_macro_additive_total_extension_from_pre359_points")
+        )
+        .with_columns(
+            _pct_expr("k359_macro_additive_total_extension_from_pre359_points", "macro_range_points").alias(
+                "k359_macro_additive_total_extension_from_pre359_pct_of_macro"
+            )
+        )
+    )
+
+
+def _window_stats(work: pl.LazyFrame) -> pl.LazyFrame:
+    frames = []
+    all_windows = {**WINDOW_SPECS, **NAMED_WINDOWS}
+    for candle, minute in CANDLE_SPECS.items():
+        for window, (start_second, end_second) in all_windows.items():
+            frames.append(
+                work.filter((pl.col("minute_et") == minute) & pl.col("second_et").is_between(start_second, end_second))
+                .sort(["date", "ts_event", "intra_ts_rank"])
+                .with_columns(
+                    pl.lit(candle).alias("candle"),
+                    pl.lit(window).alias("window"),
+                    pl.lit(start_second).cast(pl.Int64).alias("window_start_second"),
+                    pl.lit(end_second).cast(pl.Int64).alias("window_end_second"),
+                )
+                .group_by(["date", "candle", "window", "window_start_second", "window_end_second"])
+                .agg(_range_exprs("window"))
+            )
+    return pl.concat(frames, how="vertical")
 
 
 def _range_row(frame: pl.DataFrame, prefix: str) -> dict:
@@ -163,44 +371,50 @@ def _add_k359_metrics(row: dict, candle: str, pre359_high: float | None, pre359_
 
 def build_macro_tick_range_context(ticks: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
     work = _prepare_ticks(ticks)
-    rows: list[dict] = []
-    all_windows = {**WINDOW_SPECS, **NAMED_WINDOWS}
-    complete_dates = (
-        work.group_by("date")
-        .agg(pl.col("minute_et").filter(pl.col("minute_et").is_in([50, 59])).n_unique().alias("required_candles"))
-        .filter(pl.col("required_candles") == 2)
-        .select("date")
-    )
+    complete_dates = _complete_dates(work)
     work = work.join(complete_dates, on="date", how="inner")
-    for date in work["date"].unique().sort().to_list():
-        day = work.filter(pl.col("date") == date)
-        macro_stats = _range_row(day, "macro")
-        pre359 = day.filter(pl.col("minute_et").is_between(50, 58))
-        pre359_high = pre359.select(pl.col("price").max()).item() if not pre359.is_empty() else None
-        pre359_low = pre359.select(pl.col("price").min()).item() if not pre359.is_empty() else None
-        for candle, minute in CANDLE_SPECS.items():
-            candle_frame = day.filter(pl.col("minute_et") == minute)
-            candle_stats = _range_row(candle_frame, "candle")
-            for window, (start_second, end_second) in all_windows.items():
-                window_frame = candle_frame.filter(pl.col("second_et").is_between(start_second, end_second))
-                row = {
-                    "date": date,
-                    "candle": candle,
-                    "window": window,
-                    "window_start_second": start_second,
-                    "window_end_second": end_second,
-                    **_range_row(window_frame, "window"),
-                    **candle_stats,
-                    **macro_stats,
-                }
-                row = _add_metrics(row)
-                row = _add_k359_metrics(row, candle, pre359_high, pre359_low)
-                rows.append(row)
-    if not rows:
-        return pl.DataFrame()
-    return pl.DataFrame(rows, infer_schema_length=None).sort(
-        ["date", "candle", "window_start_second", "window_end_second", "window"]
+
+    ordered = work.sort(["date", "ts_event", "intra_ts_rank"])
+    macro_stats = ordered.group_by("date").agg(_range_exprs("macro"))
+    candle_stats = (
+        ordered.filter(pl.col("minute_et").is_in(list(CANDLE_SPECS.values())))
+        .with_columns(
+            pl.when(pl.col("minute_et") == CANDLE_SPECS["k350"])
+            .then(pl.lit("k350"))
+            .otherwise(pl.lit("k359"))
+            .alias("candle")
+        )
+        .group_by(["date", "candle"])
+        .agg(_range_exprs("candle"))
     )
+    pre359_stats = (
+        ordered.filter(pl.col("minute_et").is_between(50, 58))
+        .group_by("date")
+        .agg(
+            pl.col("price").max().alias("pre359_high"),
+            pl.col("price").min().alias("pre359_low"),
+        )
+    )
+
+    grid = complete_dates.join(_candle_window_grid().lazy(), how="cross")
+    study_lazy = (
+        grid.join(
+            _window_stats(ordered),
+            on=["date", "candle", "window", "window_start_second", "window_end_second"],
+            how="left",
+        )
+        .join(candle_stats, on=["date", "candle"], how="left")
+        .join(macro_stats, on="date", how="left")
+        .join(pre359_stats, on="date", how="left")
+        .with_columns(pl.col("window_tick_count").fill_null(0).cast(pl.Int64))
+    )
+    study_lazy = _add_lazy_metrics(study_lazy).select(list(STUDY_SCHEMA))
+    out = study_lazy.sort(["date", "candle", "window_start_second", "window_end_second", "window"]).collect(
+        engine="streaming"
+    )
+    if out.is_empty():
+        return _empty_study_frame()
+    return out
 
 
 def _rate(numer: int, denom: int) -> float | None:
@@ -289,14 +503,20 @@ def _decile_rows(summary_type: str, candle: str, window: str, subset: pl.DataFra
 
 
 def _normalize_summary_rows(rows: list[dict]) -> list[dict]:
-    keys = sorted({key for row in rows for key in row})
+    keys = list(SUMMARY_SCHEMA)
     return [{key: row.get(key) for key in keys} for row in rows]
+
+
+def _summary_frame(rows: list[dict]) -> pl.DataFrame:
+    if not rows:
+        return _empty_summary_frame()
+    return pl.DataFrame(_normalize_summary_rows(rows), schema=SUMMARY_SCHEMA, infer_schema_length=None)
 
 
 def summarize_macro_tick_range_context(study: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict] = []
     if study.is_empty():
-        return pl.DataFrame(_normalize_summary_rows(rows), infer_schema_length=None)
+        return _empty_summary_frame()
     for key, subset in study.group_by(["candle", "window"], maintain_order=True):
         candle, window = key
         rows.append(_baseline_row(candle, window, subset))
@@ -317,7 +537,7 @@ def summarize_macro_tick_range_context(study: pl.DataFrame) -> pl.DataFrame:
         rows.extend(_decile_rows("decile_range_raw_pct_of_open", candle, window, subset, "range_raw_pct_of_open"))
         rows.extend(_decile_rows("decile_range_pct_of_candle", candle, window, subset, "range_pct_of_candle"))
         rows.extend(_decile_rows("decile_range_pct_of_macro", candle, window, subset, "range_pct_of_macro"))
-    return pl.DataFrame(_normalize_summary_rows(rows), infer_schema_length=None)
+    return _summary_frame(rows)
 
 
 def write_macro_tick_range_context(
