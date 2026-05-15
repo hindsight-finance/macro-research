@@ -84,7 +84,7 @@ def test_build_context_adds_vwap_barrier_and_wrong_side_metrics(tmp_path: Path):
             _tick("2025-01-02T20:50:05Z", 99.0, 1),
             _tick("2025-01-02T20:50:10Z", 101.0, 1),
             _tick("2025-01-02T20:50:30Z", 98.0, 1),
-            _tick("2025-01-02T20:50:59Z", 100.0, 1),
+            _tick("2025-01-02T20:50:59Z", 98.0, 1),
             _tick("2025-01-02T20:54:59Z", 104.0, 1),
             _tick("2025-01-02T20:55:00Z", 105.0, 1),
             _tick("2025-01-02T20:59:59Z", 108.0, 1),
@@ -110,7 +110,7 @@ def test_build_context_adds_vwap_barrier_and_wrong_side_metrics(tmp_path: Path):
     assert bull["wrong_side_share_1550"] > 0
     assert bull["target_1550_10s_1554_points"] == 3.0
     assert bull["target_1550_10s_1559_points"] == 7.0
-    assert bull["target_1551_1559_points"] == 7.0
+    assert bull["target_1551_1559_points"] == 4.0
 
     bear = out.filter(pl.col("date") == pl.date(2025, 1, 3)).row(0, named=True)
     assert bear["vwap_10s_constructive"] == "constructive"
@@ -153,6 +153,7 @@ def test_dst_et_window_uses_market_timezone(tmp_path: Path):
         [
             _tick("2025-07-01T19:50:00Z", 100.0, 1),
             _tick("2025-07-01T19:50:05Z", 99.0, 1),
+            _tick("2025-07-01T19:50:06Z", 101.0, 1),
             _tick("2025-07-01T19:59:59Z", 105.0, 1),
         ],
     )
