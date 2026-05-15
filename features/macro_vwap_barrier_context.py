@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta
 from pathlib import Path
 import sys
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -132,12 +134,19 @@ def _sign_state(points: float | None) -> tuple[int | None, str | None]:
     return 0, "neutral"
 
 
-def _side_from_signed_dist(value: float | None) -> str | None:
+def _side_from_raw_dist(value: float | None) -> str | None:
     if value is None:
         return None
     if abs(value) <= 0.25:
         return "touch"
     return "above" if value > 0 else "below"
+
+
+def _barrier_ts_utc(date: object, barrier_time: object) -> datetime | None:
+    if date is None or barrier_time is None:
+        return None
+    local_dt = datetime.combine(date, time(15, 50), tzinfo=ZoneInfo(MARKET_TZ)) + timedelta(seconds=int(barrier_time))
+    return local_dt.astimezone(ZoneInfo("UTC"))
 
 
 def _wrong_side_close_bucket(value: float | None) -> str:
@@ -206,10 +215,10 @@ def _target_from_ticks(day_ticks: pl.DataFrame, start_second: int, end_second: i
     return float(window.item(window.height - 1, "price") - window.item(0, "price"))
 
 
-def _blank_tick_metrics(date: object) -> dict:
+def _blank_tick_metrics(date: object, barrier_ts_utc: datetime | None = None) -> dict:
     row = {
         "date": date,
-        "barrier_ts_utc": None,
+        "barrier_ts_utc": barrier_ts_utc,
         "post_barrier_tick_count_1550": None,
         "vwap_side_at_barrier": None,
         "vwap_dist_at_barrier_points": None,
@@ -238,8 +247,9 @@ def _tick_metrics_for_day(day: dict, ticks: pl.DataFrame) -> dict:
     trend = day["macro_trend_state"]
     barrier_time = day["barrier_time"]
     day_ticks = ticks.filter(pl.col("date") == date).sort("ts_event", "intra_ts_rank")
+    barrier_ts = _barrier_ts_utc(date, barrier_time)
     if day_ticks.is_empty() or barrier_time is None:
-        return _blank_tick_metrics(date)
+        return _blank_tick_metrics(date, barrier_ts)
 
     barrier_second = _et_second(15, 50, int(barrier_time))
     post_barrier = day_ticks.filter((pl.col("et_second") >= barrier_second) & (pl.col("et_second") < _et_second(15, 51)))
@@ -253,6 +263,11 @@ def _tick_metrics_for_day(day: dict, ticks: pl.DataFrame) -> dict:
             return vwap_value - price
         return None
 
+    def raw_dist(price: float | None, vwap_value: float | None) -> float | None:
+        if price is None or vwap_value is None:
+            return None
+        return price - vwap_value
+
     if post_barrier.is_empty():
         at_barrier = None
         at_close = None
@@ -265,8 +280,24 @@ def _tick_metrics_for_day(day: dict, ticks: pl.DataFrame) -> dict:
 
     wrong_values = [max(-value, 0.0) for value in signed_values]
     worst_wrong = max(wrong_values) if wrong_values else None
-    wrong_count = sum(value > 0 for value in wrong_values)
     post_count = post_barrier.height
+    wrong_seconds = None
+    wrong_share = None
+    if post_count:
+        post_rows = list(post_barrier.iter_rows(named=True))
+        close_ts = (barrier_ts.replace(minute=51, second=0, microsecond=0) if barrier_ts is not None else None)
+        wrong_seconds = 0.0
+        for idx, tick_row in enumerate(post_rows):
+            value = signed_dist(tick_row["price"], tick_row["vwap_1550"])
+            start_ts = tick_row["ts_event"]
+            end_ts = post_rows[idx + 1]["ts_event"] if idx + 1 < len(post_rows) else close_ts
+            if value is None or end_ts is None:
+                continue
+            elapsed = max((end_ts - start_ts).total_seconds(), 0.0)
+            if value < 0:
+                wrong_seconds += elapsed
+        denom = max(60.0 - float(int(barrier_time)), 0.0)
+        wrong_share = wrong_seconds / denom if denom else None
     close_signed = signed_dist(at_close["price"], at_close["vwap_1550"]) if at_close else None
     close_wrong = max(-close_signed, 0.0) if close_signed is not None else None
     barrier_signed = signed_dist(at_barrier["price"], at_barrier["vwap_1550"]) if at_barrier else None
@@ -276,20 +307,20 @@ def _tick_metrics_for_day(day: dict, ticks: pl.DataFrame) -> dict:
 
     row = {
         "date": date,
-        "barrier_ts_utc": at_barrier["ts_event"] if at_barrier else None,
+        "barrier_ts_utc": barrier_ts,
         "post_barrier_tick_count_1550": post_count,
-        "vwap_side_at_barrier": _side_from_signed_dist(barrier_signed),
+        "vwap_side_at_barrier": _side_from_raw_dist(raw_dist(at_barrier["price"], at_barrier["vwap_1550"]) if at_barrier else None),
         "vwap_dist_at_barrier_points": barrier_signed,
-        "vwap_side_at_1550_close": _side_from_signed_dist(close_signed),
+        "vwap_side_at_1550_close": _side_from_raw_dist(raw_dist(at_close["price"], at_close["vwap_1550"]) if at_close else None),
         "vwap_dist_at_1550_close_points": close_signed,
-        "closed_wrong_side_1550": close_wrong is not None and close_wrong > 0,
-        "closed_wrong_side_more_than_1tick": close_wrong is not None and close_wrong > 0.25,
-        "closed_wrong_side_more_than_2pts": close_wrong is not None and close_wrong > 2.0,
-        "closed_wrong_side_more_than_5pts": close_wrong is not None and close_wrong > 5.0,
+        "closed_wrong_side_1550": (close_wrong > 0) if close_wrong is not None else None,
+        "closed_wrong_side_more_than_1tick": (close_wrong > 0.25) if close_wrong is not None else None,
+        "closed_wrong_side_more_than_2pts": (close_wrong > 2.0) if close_wrong is not None else None,
+        "closed_wrong_side_more_than_5pts": (close_wrong > 5.0) if close_wrong is not None else None,
         "worst_wrong_side_dist_points": worst_wrong,
         "worst_wrong_side_dist_bps": (worst_wrong / at_close["vwap_1550"] * 10000.0) if worst_wrong is not None and at_close and at_close["vwap_1550"] not in (None, 0) else None,
-        "seconds_wrong_side_vwap": wrong_count,
-        "wrong_side_share_1550": (wrong_count / post_count) if post_count else None,
+        "seconds_wrong_side_vwap": wrong_seconds,
+        "wrong_side_share_1550": wrong_share,
         "target_1550_10s_1554_points": target_10s_1554,
         "target_1550_10s_1559_points": target_10s_1559,
         "target_1551_1559_points": target_1551_1559,
@@ -409,13 +440,16 @@ def summarize_macro_vwap_barrier_context(df: pl.DataFrame) -> pl.DataFrame:
             ("vwap_10s_only", "wrong", df.filter(pl.col("vwap_10s_constructive") == "wrong")),
             ("vwap_10s_only", "touch", df.filter(pl.col("vwap_10s_constructive") == "touch")),
             ("vwap_10s_only", "unknown", df.filter(pl.col("vwap_10s_constructive") == "unknown")),
-            ("barrier_vwap_10s", "first10_constructive", df.filter(pl.col("barrier_first10") & pl.col("vwap_10s_constructive").is_in(["constructive", "touch"]))),
-            ("barrier_vwap_10s", "first10_wrong", df.filter(pl.col("barrier_first10") & (pl.col("vwap_10s_constructive") == "wrong"))),
-            ("barrier_1555_context", "holds_1555_constructive", df.filter(pl.col("barrier_holds_and_1555_constructive"))),
-            ("barrier_1555_context", "holds_1555_not_constructive", df.filter(pl.col("barrier_holds") & ~pl.col("barrier_holds_and_1555_constructive"))),
         ]
         for scope, bucket, subset in scopes:
             rows.append(_summary_row(subset, scope, bucket, target))
+        for state in ["constructive", "wrong", "touch", "unknown"]:
+            rows.append(_summary_row(df.filter(pl.col("barrier_first10") & (pl.col("vwap_10s_constructive") == state)), "barrier_vwap_10s", f"first10_true_{state}", target))
+            rows.append(_summary_row(df.filter(~pl.col("barrier_first10") & (pl.col("vwap_10s_constructive") == state)), "barrier_vwap_10s", f"first10_false_{state}", target))
+            rows.append(_summary_row(df.filter(pl.col("barrier_holds") & (pl.col("vwap_10s_constructive") == state)), "barrier_vwap_10s", f"holds_true_{state}", target))
+            rows.append(_summary_row(df.filter(~pl.col("barrier_holds") & (pl.col("vwap_10s_constructive") == state)), "barrier_vwap_10s", f"holds_false_{state}", target))
+            rows.append(_summary_row(df.filter(pl.col("barrier_holds") & (pl.col("vwap_1555_constructive") == state)), "barrier_1555_context", f"holds_true_{state}", target))
+            rows.append(_summary_row(df.filter(~pl.col("barrier_holds") & (pl.col("vwap_1555_constructive") == state)), "barrier_1555_context", f"holds_false_{state}", target))
         for bucket in ["no_wrong_side_close", "wrong_le_1tick", "wrong_1tick_to_2pts", "wrong_2_to_5pts", "wrong_gt_5pts"]:
             rows.append(_summary_row(bucketed.filter(pl.col("_bucket") == bucket), "wrong_side_close_bucket", bucket, target))
         for value_col, scope in [("wrong_side_share_1550", "wrong_side_share_decile"), ("worst_wrong_side_dist_points", "worst_wrong_side_dist_decile")]:
