@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import polars as pl
+import pyarrow.parquet as pq
 
 from utils.minute_bars import MARKET_TZ
 from utils.tick_data import TICK_PRICE_DENOMINATOR, get_tick_schema
@@ -488,6 +489,167 @@ def summarize_macro_vwap_features(df: pl.DataFrame, feature_set: str) -> pl.Data
 
 
 
+def _edge_exprs(prefix: str, mask: pl.Expr, edge: str) -> list[pl.Expr]:
+    if edge == "first":
+        ts_at_edge = pl.col("ts_event").filter(mask).min()
+        rank_at_edge = pl.col("intra_ts_rank").filter(mask & (pl.col("ts_event") == ts_at_edge)).min()
+    elif edge == "last":
+        ts_at_edge = pl.col("ts_event").filter(mask).max()
+        rank_at_edge = pl.col("intra_ts_rank").filter(mask & (pl.col("ts_event") == ts_at_edge)).max()
+    else:
+        raise ValueError(f"edge must be 'first' or 'last', got {edge!r}")
+    edge_mask = mask & (pl.col("ts_event") == ts_at_edge) & (pl.col("intra_ts_rank") == rank_at_edge)
+    price_expr = pl.col("price").filter(edge_mask).first() if edge == "first" else pl.col("price").filter(edge_mask).last()
+    return [
+        ts_at_edge.alias(f"{prefix}_{edge}_ts"),
+        rank_at_edge.alias(f"{prefix}_{edge}_rank"),
+        price_expr.alias(f"{prefix}_{edge}_price"),
+    ]
+
+
+def _batch_aggregate(df: pl.DataFrame) -> pl.DataFrame:
+    if df.is_empty():
+        return pl.DataFrame()
+    ts_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ)
+    work = (
+        df.select(
+            pl.col("ts_event").cast(UTC_NS),
+            pl.col("intra_ts_rank").cast(pl.Int64),
+            pl.col("price_ticks").cast(pl.Int64),
+            pl.col("size").cast(pl.Int64),
+        )
+        .with_columns(
+            date=ts_et.dt.date(),
+            et_second=(
+                ts_et.dt.hour().cast(pl.Int32) * 3600
+                + ts_et.dt.minute().cast(pl.Int32) * 60
+                + ts_et.dt.second().cast(pl.Int32)
+            ),
+            price=pl.col("price_ticks").cast(pl.Float64) / TICK_PRICE_DENOMINATOR,
+        )
+        .with_columns(pv=pl.col("price") * pl.col("size").cast(pl.Float64))
+        .filter((pl.col("et_second") >= _et_second(9, 30)) & (pl.col("et_second") < _et_second(16, 0)))
+    )
+    if work.is_empty():
+        return pl.DataFrame()
+
+    all_specs = {**PREMACRO_SPECS, **INTRAMACRO_SPECS}
+    aggs: list[pl.Expr] = []
+    for prefix, (start_second, end_second) in all_specs.items():
+        mask = _window_mask(start_second, end_second)
+        aggs.extend([
+            pl.col("pv").filter(mask).sum().alias(f"{prefix}_pv"),
+            pl.col("size").filter(mask).sum().alias(f"{prefix}_total_size"),
+            *_edge_exprs(prefix, mask, "last"),
+        ])
+    for prefix, (start_second, end_second) in TARGET_SPECS.items():
+        mask = _window_mask(start_second, end_second)
+        aggs.extend([
+            *_edge_exprs(f"{prefix}_open", mask, "first"),
+            *_edge_exprs(f"{prefix}_close", mask, "last"),
+        ])
+    return work.group_by("date").agg(*aggs)
+
+
+def _is_better_edge(row: dict, state: dict, key: str, edge: str) -> bool:
+    ts = row.get(f"{key}_{edge}_ts")
+    rank = row.get(f"{key}_{edge}_rank")
+    if ts is None or rank is None:
+        return False
+    old_ts = state.get(f"{key}_{edge}_ts")
+    old_rank = state.get(f"{key}_{edge}_rank")
+    if old_ts is None:
+        return True
+    if edge == "first":
+        return (ts, rank) < (old_ts, old_rank)
+    return (ts, rank) > (old_ts, old_rank)
+
+
+def _update_edge(row: dict, state: dict, key: str, edge: str) -> None:
+    if _is_better_edge(row, state, key, edge):
+        state[f"{key}_{edge}_ts"] = row.get(f"{key}_{edge}_ts")
+        state[f"{key}_{edge}_rank"] = row.get(f"{key}_{edge}_rank")
+        state[f"{key}_{edge}_price"] = row.get(f"{key}_{edge}_price")
+
+
+def _side_from_dist(dist: float | None) -> str | None:
+    if dist is None:
+        return None
+    if abs(dist) <= TOUCH_THRESHOLD_POINTS:
+        return "touch"
+    return "above" if dist > TOUCH_THRESHOLD_POINTS else "below"
+
+
+def _target_state(points: float | None) -> tuple[int | None, str | None]:
+    if points is None:
+        return None, None
+    if points > 0:
+        return 1, "bullish"
+    if points < 0:
+        return -1, "bearish"
+    return 0, "neutral"
+
+
+def _finalize_feature_row(date, state: dict, prefixes: tuple[str, ...], feature_set: str) -> dict:
+    row = {"date": date}
+    for prefix in prefixes:
+        total_size = state.get(f"{prefix}_total_size", 0) or 0
+        pv = state.get(f"{prefix}_pv", 0.0) or 0.0
+        vwap = (pv / total_size) if total_size > 0 else None
+        price = state.get(f"{prefix}_last_price")
+        dist_points = (price - vwap) if price is not None and vwap is not None else None
+        dist_bps = ((price / vwap - 1.0) * 10000.0) if price is not None and vwap not in (None, 0) else None
+        row[f"{prefix}_vwap"] = vwap
+        row[f"{prefix}_price"] = price
+        row[f"{prefix}_vwap_dist_points"] = dist_points
+        row[f"{prefix}_vwap_dist_bps"] = dist_bps
+        row[f"{prefix}_vwap_side"] = _side_from_dist(dist_points)
+
+    output_prefix = "premacro" if feature_set == "premacro" else "intramacro"
+    sides = [row.get(f"{prefix}_vwap_side") for prefix in prefixes]
+    row[f"{output_prefix}_above_count"] = sum(side == "above" for side in sides)
+    row[f"{output_prefix}_below_count"] = sum(side == "below" for side in sides)
+    row[f"{output_prefix}_touch_count"] = sum(side == "touch" for side in sides)
+    row[f"{output_prefix}_net_side_score"] = row[f"{output_prefix}_above_count"] - row[f"{output_prefix}_below_count"]
+
+    for prefix in TARGET_PREFIXES:
+        open_price = state.get(f"{prefix}_open_first_price")
+        close_price = state.get(f"{prefix}_close_last_price")
+        points = (close_price - open_price) if open_price is not None and close_price is not None else None
+        sign, trend_state = _target_state(points)
+        row[f"{prefix}_points"] = points
+        row[f"{prefix}_sign"] = sign
+        row[f"{prefix}_state"] = trend_state
+    return row
+
+
+def _compute_streaming_features(input_path: str | Path, batch_size: int = 750_000) -> tuple[pl.DataFrame, pl.DataFrame]:
+    _validate_tick_schema(input_path)
+    states: dict[object, dict] = {}
+    parquet_file = pq.ParquetFile(input_path)
+    columns = ["ts_event", "intra_ts_rank", "price_ticks", "size"]
+    for batch in parquet_file.iter_batches(columns=columns, batch_size=batch_size):
+        batch_df = _batch_aggregate(pl.from_arrow(batch))
+        if batch_df.is_empty():
+            continue
+        for row in batch_df.iter_rows(named=True):
+            date = row["date"]
+            state = states.setdefault(date, {})
+            for prefix in (*PREMACRO_FEATURE_PREFIXES, *INTRAMACRO_FEATURE_PREFIXES):
+                state[f"{prefix}_pv"] = (state.get(f"{prefix}_pv", 0.0) or 0.0) + (row.get(f"{prefix}_pv", 0.0) or 0.0)
+                state[f"{prefix}_total_size"] = (state.get(f"{prefix}_total_size", 0) or 0) + (row.get(f"{prefix}_total_size", 0) or 0)
+                _update_edge(row, state, prefix, "last")
+            for prefix in TARGET_PREFIXES:
+                _update_edge(row, state, f"{prefix}_open", "first")
+                _update_edge(row, state, f"{prefix}_close", "last")
+
+    premacro_rows = [_finalize_feature_row(date, state, PREMACRO_FEATURE_PREFIXES, "premacro") for date, state in states.items()]
+    intramacro_rows = [_finalize_feature_row(date, state, INTRAMACRO_FEATURE_PREFIXES, "intramacro") for date, state in states.items()]
+    premacro = pl.DataFrame(premacro_rows, infer_schema_length=None).select(PREMACRO_COLUMNS).sort("date") if premacro_rows else pl.DataFrame(schema={column: pl.Null for column in PREMACRO_COLUMNS})
+    intramacro_cols = [column for column in INTRAMACRO_COLUMNS if column not in BARRIER_COLUMNS]
+    intramacro = pl.DataFrame(intramacro_rows, infer_schema_length=None).select(intramacro_cols).sort("date") if intramacro_rows else pl.DataFrame(schema={column: pl.Null for column in intramacro_cols})
+    return premacro, intramacro
+
 def _month_start(value: datetime) -> datetime:
     return datetime(value.year, value.month, 1, tzinfo=timezone.utc)
 
@@ -559,8 +721,9 @@ def write_macro_vwap_features(
     intramacro_summary_output_path: str | Path = INTRAMACRO_SUMMARY_OUTPUT_PATH,
     barrier_path: str | Path | None = DEFAULT_BARRIER_PATH,
 ) -> tuple[Path, Path, Path, Path]:
-    premacro = _collect_monthly(input_path, "premacro", barrier_path=barrier_path)
-    intramacro = _collect_monthly(input_path, "intramacro", barrier_path=barrier_path)
+    premacro, intramacro_without_barrier = _compute_streaming_features(input_path)
+    barrier = _barrier_context(barrier_path).collect(engine="streaming")
+    intramacro = intramacro_without_barrier.join(barrier, on="date", how="left").select(INTRAMACRO_COLUMNS)
     premacro_summary = summarize_macro_vwap_features(premacro, feature_set="premacro")
     intramacro_summary = summarize_macro_vwap_features(intramacro, feature_set="intramacro")
 
