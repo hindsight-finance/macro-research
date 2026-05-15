@@ -91,7 +91,7 @@ def test_strict_checkpoint_boundaries_exclude_equal_timestamp_ticks(tmp_path: Pa
     assert row["macro_1550_at_1550_10s_price"] == 101.0
     assert row["macro_1550_at_1555_price"] == 102.0
     assert row["macro_1550_at_1600_price"] == 104.0
-    assert row["eoii_1555_at_1600_vwap"] == pytest.approx((103.0 + 104.0) / 2)
+    assert row["eoii_1555_at_1600_vwap"] == pytest.approx((200.0 + 103.0 + 104.0) / 3)
     assert row["target_1550_1554_points"] == 2.0
     assert row["target_1555_1559_points"] == -96.0
     assert row["target_1550_1559_points"] == 4.0

@@ -166,7 +166,7 @@ def _add_distance_columns(lf: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
 
 def _anchored_vwap(base: pl.LazyFrame, prefix: str, anchor_second: int, checkpoint_second: int) -> pl.LazyFrame:
     window = (
-        base.filter(((pl.col("et_second") > anchor_second) if prefix == "eoii_1555_at_1600" else (pl.col("et_second") >= anchor_second)) & (pl.col("et_second") < checkpoint_second))
+        base.filter((pl.col("et_second") >= anchor_second) & (pl.col("et_second") < checkpoint_second))
         .sort("date", "ts_event", "intra_ts_rank")
         .group_by("date")
         .agg(
