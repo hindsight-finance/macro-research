@@ -177,6 +177,52 @@ def test_build_macro_vwap_intramacro_joins_optional_barrier_context(tmp_path: Pa
     assert row["barrier_holds"] is True
 
 
+def test_same_timestamp_rows_use_intra_ts_rank_for_open_close_and_checkpoint(tmp_path: Path):
+    path = tmp_path / "ticks.parquet"
+    _write_ticks(
+        path,
+        [
+            _tick("2025-01-02T20:54:59Z", 140.0, 1, rank=2),
+            _tick("2025-01-02T20:50:00Z", 110.0, 1, rank=2),
+            _tick("2025-01-02T20:49:59Z", 103.0, 1, rank=3),
+            _tick("2025-01-02T14:30:00Z", 100.0, 1, rank=0),
+            _tick("2025-01-02T20:54:59Z", 130.0, 1, rank=1),
+            _tick("2025-01-02T20:50:00Z", 105.0, 1, rank=1),
+            _tick("2025-01-02T20:49:59Z", 101.0, 1, rank=1),
+            _tick("2025-01-02T20:55:00Z", 150.0, 1, rank=1),
+            _tick("2025-01-02T20:59:59Z", 160.0, 1, rank=1),
+            _tick("2025-01-02T20:49:59Z", 102.0, 1, rank=2),
+        ],
+    )
+
+    premacro = build_macro_vwap_premacro(path).collect(engine="streaming").row(0, named=True)
+    intramacro = build_macro_vwap_intramacro(path, barrier_path=None).collect(engine="streaming").row(0, named=True)
+
+    assert premacro["rth_0930_price"] == 103.0
+    assert premacro["target_1550_1554_points"] == 35.0
+    assert intramacro["macro_1550_at_1555_price"] == 140.0
+
+
+def test_intramacro_barrier_context_validates_required_columns(tmp_path: Path):
+    tick_path = tmp_path / "ticks.parquet"
+    barrier_path = tmp_path / "barrier.parquet"
+    _write_ticks(
+        tick_path,
+        [
+            _tick("2025-01-02T20:50:00Z", 100.0, 1),
+            _tick("2025-01-02T20:54:59Z", 101.0, 1),
+            _tick("2025-01-02T20:55:00Z", 102.0, 1),
+            _tick("2025-01-02T20:59:59Z", 103.0, 1),
+        ],
+    )
+    pl.DataFrame({"date": ["2025-01-02"], "macro_trend_state": ["bullish"]}).with_columns(
+        pl.col("date").str.to_date()
+    ).write_parquet(barrier_path)
+
+    with pytest.raises(ValueError, match="Missing barrier columns"):
+        build_macro_vwap_intramacro(tick_path, barrier_path=barrier_path).collect(engine="streaming")
+
+
 def test_summer_dst_uses_new_york_market_time(tmp_path: Path):
     path = tmp_path / "ticks.parquet"
     _write_ticks(

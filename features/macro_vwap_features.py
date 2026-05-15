@@ -18,6 +18,17 @@ INTRAMACRO_SUMMARY_OUTPUT_PATH = Path("outputs/nq_macro_vwap_intramacro_summary.
 UTC_NS = pl.Datetime("ns", time_zone="UTC")
 TOUCH_THRESHOLD_POINTS = 0.25
 _REQUIRED_TICK_COLUMNS = {"ts_event", "intra_ts_rank", "price_ticks", "size"}
+_REQUIRED_BARRIER_COLUMNS = {
+    "date",
+    "macro_trend_state",
+    "barrier_extreme",
+    "barrier_price",
+    "barrier_time",
+    "barrier_first10",
+    "barrier_is_macro_extreme",
+    "barrier_holds",
+    "edge_case",
+}
 
 TARGET_PREFIXES = ("target_1550_1554", "target_1555_1559", "target_1550_1559")
 PREMACRO_FEATURE_PREFIXES = ("rth_0930", "pm_1300", "h3pm_1500")
@@ -164,22 +175,6 @@ def _add_distance_columns(lf: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
     )
 
 
-def _anchored_vwap(base: pl.LazyFrame, prefix: str, anchor_second: int, checkpoint_second: int) -> pl.LazyFrame:
-    window = (
-        base.filter((pl.col("et_second") >= anchor_second) & (pl.col("et_second") < checkpoint_second))
-        .sort("date", "ts_event", "intra_ts_rank")
-        .group_by("date")
-        .agg(
-            pl.col("pv").sum().alias(f"{prefix}_pv"),
-            pl.col("size").sum().alias(f"{prefix}_total_size"),
-            pl.col("price").last().alias(f"{prefix}_price"),
-        )
-        .with_columns(_safe_vwap_expr(prefix).alias(f"{prefix}_vwap"))
-        .select("date", f"{prefix}_vwap", f"{prefix}_price")
-    )
-    return _add_distance_columns(window, prefix)
-
-
 def _state_expr(points_col: str) -> pl.Expr:
     points = pl.col(points_col)
     return (
@@ -198,33 +193,45 @@ def _sign_expr(points_col: str) -> pl.Expr:
     return pl.when(points.is_null()).then(None).when(points > 0).then(1).when(points < 0).then(-1).otherwise(0)
 
 
-def _target_window(base: pl.LazyFrame, prefix: str, start_second: int, end_second: int) -> pl.LazyFrame:
-    points_col = f"{prefix}_points"
-    return (
-        base.filter((pl.col("et_second") >= start_second) & (pl.col("et_second") < end_second))
-        .sort("date", "ts_event", "intra_ts_rank")
-        .group_by("date")
-        .agg(
-            pl.col("price").first().alias(f"{prefix}_open"),
-            pl.col("price").last().alias(f"{prefix}_close"),
+def _window_mask(start_second: int, end_second: int) -> pl.Expr:
+    return (pl.col("et_second") >= start_second) & (pl.col("et_second") < end_second)
+
+
+def _daily_vwap_target_frame(base: pl.LazyFrame, vwap_specs: dict[str, tuple[int, int]]) -> pl.LazyFrame:
+    aggs: list[pl.Expr] = []
+    for prefix, (anchor_second, checkpoint_second) in vwap_specs.items():
+        mask = _window_mask(anchor_second, checkpoint_second)
+        aggs.extend(
+            [
+                pl.col("pv").filter(mask).sum().alias(f"{prefix}_pv"),
+                pl.col("size").filter(mask).sum().alias(f"{prefix}_total_size"),
+                pl.col("price").filter(mask).last().alias(f"{prefix}_price"),
+            ]
         )
-        .with_columns((pl.col(f"{prefix}_close") - pl.col(f"{prefix}_open")).alias(points_col))
-        .with_columns(
+    for prefix, (start_second, end_second) in TARGET_SPECS.items():
+        mask = _window_mask(start_second, end_second)
+        aggs.extend(
+            [
+                pl.col("price").filter(mask).first().alias(f"{prefix}_open"),
+                pl.col("price").filter(mask).last().alias(f"{prefix}_close"),
+            ]
+        )
+
+    out = base.sort("date", "ts_event", "intra_ts_rank").group_by("date", maintain_order=True).agg(*aggs)
+
+    for prefix in vwap_specs:
+        out = out.with_columns(_safe_vwap_expr(prefix).alias(f"{prefix}_vwap"))
+        out = _add_distance_columns(out, prefix)
+
+    for prefix in TARGET_PREFIXES:
+        points_col = f"{prefix}_points"
+        out = out.with_columns((pl.col(f"{prefix}_close") - pl.col(f"{prefix}_open")).alias(points_col))
+        out = out.with_columns(
             _sign_expr(points_col).cast(pl.Int8).alias(f"{prefix}_sign"),
             _state_expr(points_col).alias(f"{prefix}_state"),
         )
-        .select("date", points_col, f"{prefix}_sign", f"{prefix}_state")
-    )
 
-
-def _target_frame(base: pl.LazyFrame) -> pl.LazyFrame:
-    targets = None
-    for prefix, (start_second, end_second) in TARGET_SPECS.items():
-        target = _target_window(base, prefix, start_second, end_second)
-        targets = target if targets is None else targets.join(target, on="date", how="full", coalesce=True)
-    if targets is None:
-        return pl.LazyFrame(schema={"date": pl.Date})
-    return targets
+    return out
 
 
 def _count_side_expr(prefixes: tuple[str, ...], side: str) -> pl.Expr:
@@ -266,6 +273,9 @@ def _barrier_context(barrier_path: str | Path | None) -> pl.LazyFrame:
     path = Path(barrier_path)
     if not path.exists():
         return _empty_barrier_context()
+    missing = sorted(_REQUIRED_BARRIER_COLUMNS - set(get_tick_schema(path).names))
+    if missing:
+        raise ValueError(f"Missing barrier columns: {missing}")
     return pl.scan_parquet(path).select(
         pl.col("date").cast(pl.Date),
         pl.col("macro_trend_state").alias("barrier_macro_trend_state"),
@@ -281,12 +291,8 @@ def _barrier_context(barrier_path: str | Path | None) -> pl.LazyFrame:
 
 def build_macro_vwap_premacro(path: str | Path = INPUT_PATH) -> pl.LazyFrame:
     base = _scan_ticks(path)
-    dates = base.select("date").unique()
-    out = dates
-    for prefix, (anchor_second, checkpoint_second) in PREMACRO_SPECS.items():
-        out = out.join(_anchored_vwap(base, prefix, anchor_second, checkpoint_second), on="date", how="left")
+    out = _daily_vwap_target_frame(base, PREMACRO_SPECS)
     out = _add_confluence(out, PREMACRO_FEATURE_PREFIXES, "premacro")
-    out = out.join(_target_frame(base), on="date", how="left")
     return out.select(PREMACRO_COLUMNS).sort("date")
 
 
@@ -295,12 +301,8 @@ def build_macro_vwap_intramacro(
     barrier_path: str | Path | None = DEFAULT_BARRIER_PATH,
 ) -> pl.LazyFrame:
     base = _scan_ticks(path)
-    dates = base.select("date").unique()
-    out = dates
-    for prefix, (anchor_second, checkpoint_second) in INTRAMACRO_SPECS.items():
-        out = out.join(_anchored_vwap(base, prefix, anchor_second, checkpoint_second), on="date", how="left")
+    out = _daily_vwap_target_frame(base, INTRAMACRO_SPECS)
     out = _add_confluence(out, INTRAMACRO_FEATURE_PREFIXES, "intramacro")
-    out = out.join(_target_frame(base), on="date", how="left")
     out = out.join(_barrier_context(barrier_path), on="date", how="left")
     return out.select(INTRAMACRO_COLUMNS).sort("date")
 
