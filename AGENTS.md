@@ -56,5 +56,74 @@ Most current visualization scripts use headless Matplotlib `Agg`; older/manual s
 ## Testing Guidelines
 Prefer `pytest`-compatible `test_*.py` files even when a test also acts as a runnable analysis script. Store fixture CSVs or generated fixture parquet files beside or inside the tests that use them. Cover both happy-path calculations and schema failures for new data-processing functions. For tick studies, include DST coverage, bounded-window filtering, and first-touch/tie behavior. If a change produces plots, add a non-visual assertion path so the logic can run in CI or headless shells.
 
+
+## Experiment Log Protocol
+Use Markdown-only experiment logs for completed/requested research findings. Create or update logs when the user explicitly asks for an experiment log, research log entry, findings log, or asks to keep an ongoing experiment log for a research thread.
+
+Recommended locations:
+
+- `docs/research_log.md` for a human-maintained index of experiment logs.
+- `docs/experiments/NNNN-short-name.md` for individual experiment logs, where `NNNN` is the next sequential number.
+
+When creating an experiment log, use this schema:
+
+```markdown
+# Experiment: <name>
+
+## Status
+Exploratory / Validated / Superseded / Deprecated
+
+## Question
+What was this experiment trying to answer?
+
+## Dataset
+- Asset(s):
+- Input minute file(s):
+- Input tick file(s):
+- Date range:
+- Timezone/session definition:
+
+## Study Universe
+- Dates/events included:
+- Window(s):
+- Completeness filters:
+- Regime/context joins:
+- Alignment notes:
+
+## Parameters
+- Anchors/windows:
+- Bucket size:
+- Thresholds/bins:
+- Tie rules:
+- Other filters:
+
+## Results
+Headline metrics, sample sizes, and comparison table.
+
+## Findings
+Plain-English conclusions and what changed versus the baseline.
+
+## Caveats
+Small samples, in-sample tuning, stale inputs, lookahead/alignment risks, missing-score behavior, or unresolved discrepancies.
+
+## Output Files
+- Generated parquet/CSV:
+- Reports/charts:
+- Source scripts/specs:
+
+## Follow-ups
+Specific next tests or documentation updates.
+```
+
+Experiment log rules:
+
+- Prefer concise tables over raw dumps.
+- Always include sample sizes with rates.
+- Always identify whether the result is exploratory or validated.
+- If an experiment supersedes older work, state what it supersedes and why.
+- If two results disagree, first check anchor definitions, target windows, date ranges, session definitions, completeness filters, and regime/context joins before treating it as a model failure.
+- Do not hand-edit generated CSV/parquet artifacts to make an experiment log; regenerate outputs from scripts or cite existing generated files.
+- For tick studies, record whether the implementation uses bounded lazy scans, streaming collection, or PyArrow batch streaming to avoid full tick-file eager reads.
+
 ## Data, Commits, and Pull Requests
 Do not overwrite source files in `input-data/`; write derived artifacts to `outputs/` and avoid committing large generated files unless they are intentional research deliverables. Virtualenvs, including `.venv-codex/`, and generated outputs should remain untracked. Use short imperative Conventional Commit subjects such as `feat: add CPI cohort summary`. Pull requests should describe the dataset touched, commands run, and any output files or figures reviewers should inspect.
