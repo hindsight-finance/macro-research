@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
@@ -119,18 +120,25 @@ def _validate_tick_schema(path: str | Path) -> None:
         raise ValueError(f"Missing tick columns: {missing}")
 
 
-def _scan_ticks(path: str | Path) -> pl.LazyFrame:
+def _scan_ticks(
+    path: str | Path,
+    start_utc: datetime | None = None,
+    end_utc: datetime | None = None,
+) -> pl.LazyFrame:
     _validate_tick_schema(path)
     ts_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ)
+    lf = pl.scan_parquet(path).select(
+        pl.col("ts_event").cast(UTC_NS).alias("ts_event"),
+        pl.col("intra_ts_rank").cast(pl.Int64),
+        pl.col("price_ticks").cast(pl.Int64),
+        pl.col("size").cast(pl.Int64),
+    )
+    if start_utc is not None:
+        lf = lf.filter(pl.col("ts_event") >= pl.lit(start_utc))
+    if end_utc is not None:
+        lf = lf.filter(pl.col("ts_event") < pl.lit(end_utc))
     return (
-        pl.scan_parquet(path)
-        .select(
-            pl.col("ts_event").cast(UTC_NS).alias("ts_event"),
-            pl.col("intra_ts_rank").cast(pl.Int64),
-            pl.col("price_ticks").cast(pl.Int64),
-            pl.col("size").cast(pl.Int64),
-        )
-        .with_columns(
+        lf.with_columns(
             datetime_et=ts_et,
             date=ts_et.dt.date(),
             et_second=(
@@ -309,8 +317,12 @@ def _barrier_context(barrier_path: str | Path | None) -> pl.LazyFrame:
     )
 
 
-def build_macro_vwap_premacro(path: str | Path = INPUT_PATH) -> pl.LazyFrame:
-    base = _scan_ticks(path)
+def build_macro_vwap_premacro(
+    path: str | Path = INPUT_PATH,
+    start_utc: datetime | None = None,
+    end_utc: datetime | None = None,
+) -> pl.LazyFrame:
+    base = _scan_ticks(path, start_utc=start_utc, end_utc=end_utc)
     out = _daily_vwap_target_frame(base, PREMACRO_SPECS)
     out = _add_confluence(out, PREMACRO_FEATURE_PREFIXES, "premacro")
     return out.select(PREMACRO_COLUMNS).sort("date")
@@ -319,8 +331,10 @@ def build_macro_vwap_premacro(path: str | Path = INPUT_PATH) -> pl.LazyFrame:
 def build_macro_vwap_intramacro(
     path: str | Path = INPUT_PATH,
     barrier_path: str | Path | None = DEFAULT_BARRIER_PATH,
+    start_utc: datetime | None = None,
+    end_utc: datetime | None = None,
 ) -> pl.LazyFrame:
-    base = _scan_ticks(path)
+    base = _scan_ticks(path, start_utc=start_utc, end_utc=end_utc)
     out = _daily_vwap_target_frame(base, INTRAMACRO_SPECS)
     out = _add_confluence(out, INTRAMACRO_FEATURE_PREFIXES, "intramacro")
     out = out.join(_barrier_context(barrier_path), on="date", how="left")
@@ -472,6 +486,64 @@ def summarize_macro_vwap_features(df: pl.DataFrame, feature_set: str) -> pl.Data
     return pl.DataFrame(rows, infer_schema_length=None).select(SUMMARY_COLUMNS)
 
 
+
+
+def _month_start(value: datetime) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=timezone.utc)
+
+
+def _next_month(value: datetime) -> datetime:
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=timezone.utc)
+    return datetime(value.year, value.month + 1, 1, tzinfo=timezone.utc)
+
+
+def _tick_month_ranges(path: str | Path) -> list[tuple[datetime, datetime]]:
+    _validate_tick_schema(path)
+    bounds = pl.scan_parquet(path).select(
+        pl.col("ts_event").cast(UTC_NS).min().alias("min_ts"),
+        pl.col("ts_event").cast(UTC_NS).max().alias("max_ts"),
+    ).collect()
+    min_ts = bounds.item(0, "min_ts")
+    max_ts = bounds.item(0, "max_ts")
+    if min_ts is None or max_ts is None:
+        return []
+    cursor = _month_start(min_ts)
+    end_limit = _next_month(_month_start(max_ts))
+    ranges: list[tuple[datetime, datetime]] = []
+    while cursor < end_limit:
+        nxt = _next_month(cursor)
+        ranges.append((cursor, nxt))
+        cursor = nxt
+    return ranges
+
+
+def _collect_monthly(
+    input_path: str | Path,
+    feature_set: str,
+    barrier_path: str | Path | None = DEFAULT_BARRIER_PATH,
+) -> pl.DataFrame:
+    frames: list[pl.DataFrame] = []
+    for start_utc, end_utc in _tick_month_ranges(input_path):
+        if feature_set == "premacro":
+            lf = build_macro_vwap_premacro(input_path, start_utc=start_utc, end_utc=end_utc)
+        elif feature_set == "intramacro":
+            lf = build_macro_vwap_intramacro(
+                input_path,
+                barrier_path=barrier_path,
+                start_utc=start_utc,
+                end_utc=end_utc,
+            )
+        else:
+            raise ValueError(f"feature_set must be 'premacro' or 'intramacro', got {feature_set!r}")
+        frame = lf.collect(engine="streaming")
+        if not frame.is_empty():
+            frames.append(frame)
+    if not frames:
+        columns = PREMACRO_COLUMNS if feature_set == "premacro" else INTRAMACRO_COLUMNS
+        return pl.DataFrame(schema={column: pl.Null for column in columns})
+    return pl.concat(frames, how="vertical_relaxed").unique(subset=["date"], keep="first").sort("date")
+
 def _write_df(path: str | Path, df: pl.DataFrame) -> Path:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -487,8 +559,8 @@ def write_macro_vwap_features(
     intramacro_summary_output_path: str | Path = INTRAMACRO_SUMMARY_OUTPUT_PATH,
     barrier_path: str | Path | None = DEFAULT_BARRIER_PATH,
 ) -> tuple[Path, Path, Path, Path]:
-    premacro = build_macro_vwap_premacro(input_path).collect(engine="streaming")
-    intramacro = build_macro_vwap_intramacro(input_path, barrier_path=barrier_path).collect(engine="streaming")
+    premacro = _collect_monthly(input_path, "premacro", barrier_path=barrier_path)
+    intramacro = _collect_monthly(input_path, "intramacro", barrier_path=barrier_path)
     premacro_summary = summarize_macro_vwap_features(premacro, feature_set="premacro")
     intramacro_summary = summarize_macro_vwap_features(intramacro, feature_set="intramacro")
 
