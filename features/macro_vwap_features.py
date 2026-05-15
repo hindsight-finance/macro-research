@@ -410,7 +410,7 @@ def summarize_macro_vwap_features(df: pl.DataFrame, feature_set: str) -> pl.Data
             continue
         banded = df.with_columns(_bps_band_expr(prefix).alias("_bucket"))
         deciled = _deciled_frame(df, prefix)
-        for target_i, target in enumerate(targets):
+        for target in targets:
             for side in ["above", "below", "touch"]:
                 subset = df.filter(pl.col(side_col) == side)
                 rows.append(_summary_row(subset, feature_set, prefix, target, "side", side))
@@ -420,8 +420,7 @@ def summarize_macro_vwap_features(df: pl.DataFrame, feature_set: str) -> pl.Data
             ]:
                 subset = banded.filter(pl.col("_bucket") == band)
                 rows.append(_summary_row(subset, feature_set, prefix, target, "fixed_bps_band", band))
-            # Keep decile diagnostics compact: one decile distribution per feature, using first available target.
-            if target_i == 0 and deciled is not None:
+            if deciled is not None:
                 for decile in [str(i) for i in range(1, 11)]:
                     rows.append(_summary_row(deciled.filter(pl.col("_bucket") == decile), feature_set, prefix, target, "decile", decile))
 

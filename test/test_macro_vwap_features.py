@@ -227,7 +227,13 @@ def test_summarize_macro_vwap_features_reports_side_bands_deciles_and_confluence
     assert side["sample_size"] == 4
     assert side["bearish_pct"] == 100.0
     assert summary.filter(pl.col("scope") == "fixed_bps_band").height > 0
-    assert summary.filter(pl.col("scope") == "decile").height == 10
+    deciles = summary.filter(pl.col("scope") == "decile")
+    assert deciles.height == 30
+    assert set(deciles.select("target_name").to_series().to_list()) == {
+        "target_1550_1554",
+        "target_1555_1559",
+        "target_1550_1559",
+    }
     assert summary.filter(pl.col("scope") == "confluence").height > 0
 
 
