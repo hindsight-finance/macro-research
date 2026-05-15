@@ -197,6 +197,26 @@ def _window_mask(start_second: int, end_second: int) -> pl.Expr:
     return (pl.col("et_second") >= start_second) & (pl.col("et_second") < end_second)
 
 
+def _ordered_price(mask: pl.Expr, position: str) -> pl.Expr:
+    if position == "first":
+        ts_at_edge = pl.col("ts_event").filter(mask).min()
+        rank_at_edge = pl.col("intra_ts_rank").filter(mask & (pl.col("ts_event") == ts_at_edge)).min()
+        return pl.col("price").filter(
+            mask
+            & (pl.col("ts_event") == ts_at_edge)
+            & (pl.col("intra_ts_rank") == rank_at_edge)
+        ).first()
+    if position == "last":
+        ts_at_edge = pl.col("ts_event").filter(mask).max()
+        rank_at_edge = pl.col("intra_ts_rank").filter(mask & (pl.col("ts_event") == ts_at_edge)).max()
+        return pl.col("price").filter(
+            mask
+            & (pl.col("ts_event") == ts_at_edge)
+            & (pl.col("intra_ts_rank") == rank_at_edge)
+        ).last()
+    raise ValueError(f"position must be 'first' or 'last', got {position!r}")
+
+
 def _daily_vwap_target_frame(base: pl.LazyFrame, vwap_specs: dict[str, tuple[int, int]]) -> pl.LazyFrame:
     aggs: list[pl.Expr] = []
     for prefix, (anchor_second, checkpoint_second) in vwap_specs.items():
@@ -205,19 +225,19 @@ def _daily_vwap_target_frame(base: pl.LazyFrame, vwap_specs: dict[str, tuple[int
             [
                 pl.col("pv").filter(mask).sum().alias(f"{prefix}_pv"),
                 pl.col("size").filter(mask).sum().alias(f"{prefix}_total_size"),
-                pl.col("price").filter(mask).last().alias(f"{prefix}_price"),
+                _ordered_price(mask, "last").alias(f"{prefix}_price"),
             ]
         )
     for prefix, (start_second, end_second) in TARGET_SPECS.items():
         mask = _window_mask(start_second, end_second)
         aggs.extend(
             [
-                pl.col("price").filter(mask).first().alias(f"{prefix}_open"),
-                pl.col("price").filter(mask).last().alias(f"{prefix}_close"),
+                _ordered_price(mask, "first").alias(f"{prefix}_open"),
+                _ordered_price(mask, "last").alias(f"{prefix}_close"),
             ]
         )
 
-    out = base.sort("date", "ts_event", "intra_ts_rank").group_by("date", maintain_order=True).agg(*aggs)
+    out = base.group_by("date", maintain_order=True).agg(*aggs)
 
     for prefix in vwap_specs:
         out = out.with_columns(_safe_vwap_expr(prefix).alias(f"{prefix}_vwap"))
