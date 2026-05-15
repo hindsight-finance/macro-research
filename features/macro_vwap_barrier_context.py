@@ -93,6 +93,57 @@ MACRO_VWAP_BARRIER_CONTEXT_SUMMARY_COLUMNS = [
 ]
 
 
+def _context_schema() -> dict[str, pl.DataType]:
+    schema: dict[str, pl.DataType] = {column: pl.Float64 for column in MACRO_VWAP_BARRIER_CONTEXT_COLUMNS}
+    for column in [
+        "date",
+    ]:
+        schema[column] = pl.Date
+    for column in [
+        "macro_trend_state", "barrier_extreme", "vwap_10s_side", "vwap_10s_constructive",
+        "vwap_side_at_barrier", "vwap_side_at_1550_close", "vwap_1555_side",
+        "vwap_1555_constructive", "vwap_context_10s_to_1555", "target_1550_1554_state",
+        "target_1555_1559_state", "target_1550_1559_state", "target_1550_10s_1554_state",
+        "target_1550_10s_1559_state", "target_1551_1559_state",
+    ]:
+        schema[column] = pl.String
+    for column in [
+        "barrier_first10", "barrier_is_macro_extreme", "barrier_holds", "edge_case",
+        "barrier_first10_and_vwap_constructive", "closed_wrong_side_1550",
+        "closed_wrong_side_more_than_1tick", "closed_wrong_side_more_than_2pts",
+        "closed_wrong_side_more_than_5pts", "barrier_holds_and_1555_constructive",
+        "barrier_first10_and_1555_constructive",
+    ]:
+        schema[column] = pl.Boolean
+    for column in [
+        "barrier_time", "post_barrier_tick_count_1550", "seconds_wrong_side_vwap",
+        "target_1550_1554_sign", "target_1555_1559_sign", "target_1550_1559_sign",
+        "target_1550_10s_1554_sign", "target_1550_10s_1559_sign", "target_1551_1559_sign",
+    ]:
+        schema[column] = pl.Int64 if column != "seconds_wrong_side_vwap" else pl.Float64
+    schema["barrier_ts_utc"] = UTC_NS
+    return schema
+
+
+def _empty_context_frame() -> pl.DataFrame:
+    return pl.DataFrame(schema=_context_schema()).select(MACRO_VWAP_BARRIER_CONTEXT_COLUMNS)
+
+
+def _empty_tick_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "ts_event": UTC_NS,
+            "intra_ts_rank": pl.Int64,
+            "price_ticks": pl.Int64,
+            "size": pl.Int64,
+            "datetime_et": pl.Datetime("ns", time_zone=MARKET_TZ),
+            "date": pl.Date,
+            "et_second": pl.Int32,
+            "price": pl.Float64,
+        }
+    )
+
+
 def _et_second(hour: int, minute: int, second: int = 0) -> int:
     return hour * 3600 + minute * 60 + second
 
@@ -161,8 +212,13 @@ def _wrong_side_close_bucket(value: float | None) -> str:
     return "wrong_gt_5pts"
 
 
-def _scan_macro_ticks(path: str | Path) -> pl.DataFrame:
+def _scan_macro_ticks(path: str | Path, target_dates: set[object]) -> pl.DataFrame:
     _validate_tick_schema(path)
+    if not target_dates:
+        return _empty_tick_frame()
+    dates = sorted(target_dates)
+    start_utc = datetime.combine(dates[0], time(15, 50), tzinfo=ZoneInfo(MARKET_TZ)).astimezone(ZoneInfo("UTC"))
+    end_utc = datetime.combine(dates[-1], time(16, 0), tzinfo=ZoneInfo(MARKET_TZ)).astimezone(ZoneInfo("UTC"))
     ts_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ)
     return (
         pl.scan_parquet(path)
@@ -172,12 +228,14 @@ def _scan_macro_ticks(path: str | Path) -> pl.DataFrame:
             pl.col("price_ticks").cast(pl.Int64),
             pl.col("size").cast(pl.Int64),
         )
+        .filter((pl.col("ts_event") >= pl.lit(start_utc).cast(UTC_NS)) & (pl.col("ts_event") < pl.lit(end_utc).cast(UTC_NS)))
         .with_columns(
             datetime_et=ts_et,
             date=ts_et.dt.date(),
             et_second=(ts_et.dt.hour().cast(pl.Int32) * 3600 + ts_et.dt.minute().cast(pl.Int32) * 60 + ts_et.dt.second().cast(pl.Int32)),
             price=pl.col("price_ticks").cast(pl.Float64) / TICK_PRICE_DENOMINATOR,
         )
+        .filter(pl.col("date").is_in(dates))
         .filter((pl.col("et_second") >= _et_second(15, 50)) & (pl.col("et_second") < _et_second(16, 0)))
         .sort("date", "ts_event", "intra_ts_rank")
         .collect(engine="streaming")
@@ -242,11 +300,11 @@ def _blank_tick_metrics(date: object, barrier_ts_utc: datetime | None = None) ->
     return row
 
 
-def _tick_metrics_for_day(day: dict, ticks: pl.DataFrame) -> dict:
+def _tick_metrics_for_day(day: dict, day_ticks: pl.DataFrame) -> dict:
     date = day["date"]
     trend = day["macro_trend_state"]
     barrier_time = day["barrier_time"]
-    day_ticks = ticks.filter(pl.col("date") == date).sort("ts_event", "intra_ts_rank")
+    day_ticks = day_ticks.sort("ts_event", "intra_ts_rank")
     barrier_ts = _barrier_ts_utc(date, barrier_time)
     if day_ticks.is_empty() or barrier_time is None:
         return _blank_tick_metrics(date, barrier_ts)
@@ -333,8 +391,16 @@ def _tick_metrics_for_day(day: dict, ticks: pl.DataFrame) -> dict:
 
 
 def _tick_context_metrics(barrier: pl.DataFrame, tick_path: str | Path) -> pl.DataFrame:
-    ticks = _macro_open_vwap_ticks(_scan_macro_ticks(tick_path))
-    rows = [_tick_metrics_for_day(day, ticks) for day in barrier.iter_rows(named=True)]
+    target_dates = set(barrier["date"].to_list())
+    ticks = _macro_open_vwap_ticks(_scan_macro_ticks(tick_path, target_dates))
+    if ticks.is_empty():
+        tick_frames: dict[object, pl.DataFrame] = {}
+    else:
+        tick_frames = {
+            key[0] if isinstance(key, tuple) else key: frame
+            for key, frame in ticks.partition_by("date", as_dict=True, maintain_order=True).items()
+        }
+    rows = [_tick_metrics_for_day(day, tick_frames.get(day["date"], _empty_tick_frame())) for day in barrier.iter_rows(named=True)]
     return pl.DataFrame(rows, infer_schema_length=None) if rows else pl.DataFrame({"date": []}, schema={"date": pl.Date})
 
 
@@ -350,6 +416,8 @@ def build_macro_vwap_barrier_context(barrier: pl.DataFrame, vwap: pl.DataFrame, 
     _validate_frame(barrier, BARRIER_REQUIRED_COLUMNS, "barrier")
     _validate_frame(vwap, VWAP_REQUIRED_COLUMNS, "VWAP")
     base = barrier.join(vwap, on="date", how="inner")
+    if base.is_empty():
+        return _empty_context_frame()
     tick_metrics = _tick_context_metrics(base, tick_path)
     out = base.join(tick_metrics, on="date", how="left")
     rows = []

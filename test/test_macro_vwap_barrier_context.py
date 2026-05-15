@@ -11,6 +11,7 @@ from features.macro_vwap_barrier_context import (
     classify_constructive_side,
     summarize_macro_vwap_barrier_context,
     write_macro_vwap_barrier_context,
+    _scan_macro_ticks,
 )
 
 
@@ -260,6 +261,39 @@ def test_summarize_context_reports_distribution_scopes(tmp_path: Path):
         "holds_false_constructive",
         "holds_false_wrong",
     } <= set(summary.filter(pl.col("scope") == "barrier_1555_context")["bucket"].to_list())
+
+
+def test_build_context_returns_empty_typed_frame_when_no_barrier_vwap_overlap(tmp_path: Path):
+    tick_path = tmp_path / "ticks.parquet"
+    _write_ticks(tick_path, [_tick("2025-01-02T20:50:00Z", 100.0, 1)])
+    barrier = _barrier_frame().filter(pl.col("date") == pl.date(2025, 1, 2))
+    vwap = _vwap_frame().filter(pl.col("date") == pl.date(2025, 1, 3))
+
+    out = build_macro_vwap_barrier_context(barrier, vwap, tick_path)
+
+    assert out.is_empty()
+    assert out.columns == MACRO_VWAP_BARRIER_CONTEXT_COLUMNS
+
+
+def test_scan_macro_ticks_filters_to_requested_joined_dates(tmp_path: Path):
+    tick_path = tmp_path / "ticks.parquet"
+    _write_ticks(
+        tick_path,
+        [
+            _tick("2025-01-01T20:50:00Z", 90.0, 1),
+            _tick("2025-01-02T20:49:59Z", 99.0, 1),
+            _tick("2025-01-02T20:50:00Z", 100.0, 1),
+            _tick("2025-01-02T20:59:59Z", 101.0, 1),
+            _tick("2025-01-02T21:00:00Z", 102.0, 1),
+            _tick("2025-01-03T20:50:00Z", 110.0, 1),
+        ],
+    )
+
+    ticks = _scan_macro_ticks(tick_path, {datetime(2025, 1, 2).date()})
+
+    assert ticks.height == 2
+    assert ticks.select(pl.col("date").unique()).to_series().to_list() == [datetime(2025, 1, 2).date()]
+    assert ticks["price"].to_list() == [100.0, 101.0]
 
 
 def test_write_macro_vwap_barrier_context_persists_outputs(tmp_path: Path):
