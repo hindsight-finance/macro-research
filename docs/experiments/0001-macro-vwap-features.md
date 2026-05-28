@@ -1,7 +1,20 @@
+---
+type: experiment
+status: Exploratory
+tags: [asset/nq, window/macro, window/macro/open-1550, feature/vwap, feature/vwap/anchor-0930, feature/vwap/anchor-1300, feature/vwap/anchor-1500, feature/vwap/anchor-1550, feature/vwap/anchor-1555, feature/barrier]
+anchors: [rth_0930, pm_1300, h3pm_1500, macro_1550, eoii_1555]
+checkpoints: ["15:50:10", "15:55:00", "16:00:00"]
+side_threshold_pts: 0.25
+targets: [target_1550_1554, target_1555_1559, target_1550_1559]
+sample_n: 871
+---
 # Experiment: Macro VWAP Features
 
 ## Status
 Exploratory
+
+## Concepts
+[[anchored-vwap]] · [[barrier-context]] · [[macro-window]] · [[macro-open-1550]] · [[macro-outcome]] · [[volume-delta]] — see the [[Concept Map]] graph.
 
 ## Question
 Do tick-derived anchored VWAP context features help explain or frame NQ 15:50-15:59 ET macro-window direction, especially before macro, at the first 10 seconds, and at the 15:55 EOII/imbalance-open decision point?
