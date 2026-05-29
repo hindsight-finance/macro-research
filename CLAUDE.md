@@ -48,6 +48,29 @@ path when wiring the full pipeline; tests pass explicit paths.
 `input-data/` and `outputs/` are gitignored — never overwrite source files in `input-data/`,
 and don't commit large generated artifacts unless they are intentional deliverables.
 
+## Running studies on GitHub Actions (remote compute)
+
+Any study can run on a GitHub-hosted runner instead of locally — useful when the local box
+is RAM-constrained. Source data is served from **Cloudflare R2** (never committed): the
+time-sorted tick parquet is *range-read in place* (polars predicate pushdown fetches only the
+row groups a window filter touches — it never downloads the 2.8 GB file), and the small derived
+`outputs/` tree is `rclone`-synced around each run.
+
+- **Mechanism.** `utils/data_sources.py` resolves data location + R2 `storage_options` from env
+  (`TICK_DATA_URL`, `ECON_EVENTS_URL`, `R2_*`); with env unset it falls back to local
+  `input-data/`, so **local runs are unchanged**. Keep tick/source reads funnelled through
+  `utils/tick_data.py` (`scan_source`, `get_tick_schema`, `open_parquet_file`) so they pick this
+  up — don't call `pl.scan_parquet`/`pq.ParquetFile` on a raw source directly.
+- **Trigger.** `gh workflow run backtest.yml -f target=<study> [-f extra_args="..."]` runs one
+  study (`target` is a curated choice list); `sweep.yml` fans a trend ridge-alpha sweep across
+  parallel matrix jobs. Results upload as run artifacts and sync to the R2 `outputs/` mirror.
+- **Caveat.** `macro_range_forecast` defaults to `--xgb-device cuda`; runners are CPU-only, so
+  pass `extra_args="--xgb-device cpu"`.
+
+Full setup (R2 bucket layout, one-time upload, secrets, going public, range-read verification)
+is in `docs/github-actions-r2.md`. The two 1m CSVs never go to Actions — `session_tagger.py` is
+a local prep step that produces the minute-base parquet seeded into the R2 mirror.
+
 ## Time handling (critical, easy to get wrong)
 
 All logic keeps **UTC internally** (`datetime_utc`) and derives ET on demand via

@@ -34,3 +34,6 @@ input-data/
 outputs/
 features/lrlr/test/visualizations/
 features/trend/test/regime_charts/
+
+# Claude Code personal settings
+.claude/settings.local.json
