@@ -12,6 +12,7 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from utils import data_sources
 from utils.helper import merge_news_daily
 from utils.minute_bars import build_market_time_columns, derive_session_window, normalize_minute_bars
 
@@ -381,7 +382,7 @@ def run_experiment(
 
 def write_macro_range_forecasts(
     minute_path: str | Path = "outputs/nq_1m.parquet",
-    events_path: str | Path = "input-data/economic_events.parquet",
+    events_path: str | Path = data_sources.econ_events_url(),
     output_dir: str | Path = "outputs",
     holdout_fraction: float = 0.20,
     train_window_years: int = 2,
@@ -394,7 +395,10 @@ def write_macro_range_forecasts(
     xgb_learning_rate: float = 0.05,
 ) -> tuple[Path, Path]:
     minute_bars = pl.read_parquet(minute_path)
-    economic_events = pl.read_parquet(events_path)
+    economic_events = pl.read_parquet(
+        events_path,
+        storage_options=data_sources.storage_options() if data_sources.is_remote(events_path) else None,
+    )
 
     daily = add_history_features(build_macro_range_table(minute_bars, economic_events))
 
@@ -434,7 +438,7 @@ def write_macro_range_forecasts(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Macro range forecasting study")
     parser.add_argument("--minute-path", default="outputs/nq_1m.parquet")
-    parser.add_argument("--events-path", default="input-data/economic_events.parquet")
+    parser.add_argument("--events-path", default=data_sources.econ_events_url())
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--holdout-fraction", type=float, default=0.20)
     parser.add_argument("--train-window-years", type=int, default=2)

@@ -5,9 +5,10 @@ import sys
 
 import polars as pl
 
-from utils.tick_data import TICK_COLUMNS, get_tick_schema
+from utils import data_sources
+from utils.tick_data import TICK_COLUMNS, get_tick_schema, scan_source
 
-INPUT_PATH = Path("input-data/merged_nq_ticks.parquet")
+INPUT_PATH = data_sources.tick_data_url()
 OUTPUT_GLOBEX_1M_PATH = Path("outputs/nq_globex_volume_delta_1m.parquet")
 OUTPUT_MACRO_1M_PATH = Path("outputs/nq_macro_volume_delta_1m.parquet")
 OUTPUT_MACRO_5S_PATH = Path("outputs/nq_macro_volume_delta_5s.parquet")
@@ -44,7 +45,7 @@ def _validate_tick_schema(path: str | Path) -> None:
 
 def _scan_required_tick_columns(path: str | Path) -> pl.LazyFrame:
     _validate_tick_schema(path)
-    return pl.scan_parquet(path).select(TICK_COLUMNS)
+    return scan_source(path).select(TICK_COLUMNS)
 
 
 def _safe_ratio(numerator: pl.Expr, denominator: pl.Expr) -> pl.Expr:
@@ -245,7 +246,7 @@ def write_macro_volume_delta_5s(
     return _sink(build_macro_volume_delta_5s(input_path), output_path)
 
 def main() -> None:
-    if not INPUT_PATH.exists():
+    if not data_sources.source_exists(INPUT_PATH):
         print(f"[ERROR] Input not found: {INPUT_PATH}", file=sys.stderr)
         sys.exit(1)
 

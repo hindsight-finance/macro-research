@@ -1,0 +1,143 @@
+name: backtest
+
+# Run one of the repo's research scripts on a GitHub-hosted runner.
+#
+# Data is served from Cloudflare R2, never committed to the repo:
+#   - the tick parquet is range-read in place (polars fetches only the row groups a
+#     window filter touches, via storage_options pointed at R2 -- it never downloads
+#     the whole 2.8 GB file);
+#   - the small derived outputs/ tree is rclone-synced down (prerequisites) before the
+#     run and back up (results) after, so inter-script paths keep working unchanged.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL
+# Layout expected in the bucket (see Part 2 of the plan / docs):
+#   source/merged_nq_ticks.parquet, source/economic_events.parquet, outputs/<derived tree>
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which study/script to run
+        type: choice
+        required: true
+        default: macro_outcomes
+        options:
+          - macro_outcomes
+          - tick_density
+          - volume_delta
+          - macro_extreme_timing
+          - macro_1550_barrier
+          - macro_vwap_features
+          - macro_vwap_barrier_context
+          - macro_tick_range_context
+          - macro_fvg_study
+          - macro_range_forecast
+          - trend_build_table
+          - trend_run_experiments
+          - trend_summarize
+          - custom
+      extra_args:
+        description: >-
+          Extra CLI args appended to the command (required for trend_* subcommands and
+          for macro_range_forecast, e.g. "--xgb-device cpu"). For target=custom this is
+          the entire command after "python".
+        type: string
+        required: false
+        default: ""
+
+# Serialize same-target runs so they don't clobber each other's outputs/ push;
+# different targets still run in parallel.
+concurrency:
+  group: backtest-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest      # public repo -> 4 vCPU / 16 GB; unlimited minutes
+    timeout-minutes: 350        # under the 6h hosted-runner ceiling
+    env:
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      # Consumed by utils/data_sources.py to build polars storage_options for range reads
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      R2_REGION: auto
+      TICK_DATA_URL: s3://${{ secrets.R2_BUCKET }}/source/merged_nq_ticks.parquet
+      ECON_EVENTS_URL: s3://${{ secrets.R2_BUCKET }}/source/economic_events.parquet
+      # rclone "r2:" remote, configured entirely from env (no rclone.conf needed)
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT_URL }}
+      RCLONE_CONFIG_R2_REGION: auto
+      RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rclone
+
+      - name: Pull derived outputs/ (prerequisites) from R2
+        run: |
+          mkdir -p outputs
+          rclone copy "r2:${R2_BUCKET}/outputs" ./outputs --fast-list --transfers 16
+
+      - name: Run study
+        run: |
+          set -euo pipefail
+          # mark a baseline so we can collect only files this run produced/changed
+          touch /tmp/run_start
+          case "${{ inputs.target }}" in
+            macro_outcomes)              cmd="python macro_outcomes.py" ;;
+            tick_density)                cmd="python tick_density.py" ;;
+            volume_delta)                cmd="python volume_delta.py" ;;
+            macro_extreme_timing)        cmd="python -m features.macro_extreme_timing" ;;
+            macro_1550_barrier)          cmd="python -m features.macro_1550_barrier" ;;
+            macro_vwap_features)         cmd="python -m features.macro_vwap_features" ;;
+            macro_vwap_barrier_context)  cmd="python -m features.macro_vwap_barrier_context" ;;
+            macro_tick_range_context)    cmd="python -m features.macro_tick_range_context" ;;
+            macro_fvg_study)             cmd="python -m features.macro_fvg_study" ;;
+            macro_range_forecast)        cmd="python -m features.macro_range_forecast" ;;
+            trend_build_table)           cmd="python -m features.trend.modeling.cli build-table" ;;
+            trend_run_experiments)       cmd="python -m features.trend.modeling.cli run-experiments" ;;
+            trend_summarize)             cmd="python -m features.trend.modeling.cli summarize" ;;
+            custom)                      cmd="python" ;;
+            *) echo "Unknown target: ${{ inputs.target }}" >&2; exit 1 ;;
+          esac
+          echo "+ ${cmd} ${{ inputs.extra_args }}"
+          eval "${cmd} ${{ inputs.extra_args }}"
+
+      - name: Push refreshed outputs/ back to R2
+        if: always()
+        run: rclone copy ./outputs "r2:${R2_BUCKET}/outputs" --fast-list --transfers 16
+
+      - name: Stage this run's new/changed outputs for artifact
+        if: always()
+        run: |
+          mkdir -p run-artifacts
+          cd outputs
+          find . -type f -newer /tmp/run_start -print0 | while IFS= read -r -d '' f; do
+            mkdir -p "../run-artifacts/$(dirname "$f")"
+            cp "$f" "../run-artifacts/$f"
+          done
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-${{ inputs.target }}-${{ github.run_id }}
+          path: run-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

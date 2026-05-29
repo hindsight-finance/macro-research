@@ -7,10 +7,11 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from utils import data_sources
 from utils.minute_bars import MARKET_TZ
-from utils.tick_data import TICK_PRICE_DENOMINATOR, get_tick_schema
+from utils.tick_data import TICK_PRICE_DENOMINATOR, get_tick_schema, scan_source
 
-TICK_INPUT_PATH = Path("input-data/merged_nq_ticks.parquet")
+TICK_INPUT_PATH = data_sources.tick_data_url()
 BARRIER_INPUT_PATH = Path("outputs/nq_macro_1550_barrier.parquet")
 VWAP_INPUT_PATH = Path("outputs/nq_macro_vwap_intramacro.parquet")
 OUTPUT_PATH = Path("outputs/nq_macro_vwap_barrier_context.parquet")
@@ -221,7 +222,7 @@ def _scan_macro_ticks(path: str | Path, target_dates: set[object]) -> pl.DataFra
     end_utc = datetime.combine(dates[-1], time(16, 0), tzinfo=ZoneInfo(MARKET_TZ)).astimezone(ZoneInfo("UTC"))
     ts_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ)
     return (
-        pl.scan_parquet(path)
+        scan_source(path)
         .select(
             pl.col("ts_event").cast(UTC_NS).alias("ts_event"),
             pl.col("intra_ts_rank").cast(pl.Int64),
@@ -552,7 +553,7 @@ def write_macro_vwap_barrier_context(
 
 def main() -> None:
     for path in [TICK_INPUT_PATH, BARRIER_INPUT_PATH, VWAP_INPUT_PATH]:
-        if not Path(path).exists():
+        if not data_sources.source_exists(path):
             print(f"[ERROR] Input not found: {path}", file=sys.stderr)
             sys.exit(1)
     output, summary = write_macro_vwap_barrier_context()

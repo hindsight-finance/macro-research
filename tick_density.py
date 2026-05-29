@@ -13,10 +13,11 @@ from pathlib import Path
 
 import polars as pl
 
+from utils import data_sources
 from utils.minute_bars import MARKET_TZ
-from utils.tick_data import get_tick_schema
+from utils.tick_data import get_tick_schema, scan_source
 
-INPUT_PATH = Path("input-data/merged_nq_ticks.parquet")
+INPUT_PATH = data_sources.tick_data_url()
 OUTPUT_PATH = Path("outputs/nq_macro_tick_density.parquet")
 OUTPUT_DIR = Path("outputs")
 DEFAULT_5S_MACRO_MINUTES = (50, 54, 55, 59)
@@ -59,7 +60,7 @@ def _validate_tick_schema(path: str | Path) -> None:
 
 def _scan_required_tick_columns(path: str | Path) -> pl.LazyFrame:
     _validate_tick_schema(path)
-    return pl.scan_parquet(path).select(
+    return scan_source(path).select(
         pl.col("ts_event").cast(UTC_NS).alias("ts_event"),
         "intra_ts_rank",
         "side",
@@ -176,7 +177,7 @@ def write_macro_5s_tick_density_files(
 
 
 def main() -> None:
-    if not INPUT_PATH.exists():
+    if not data_sources.source_exists(INPUT_PATH):
         print(f"[ERROR] Input not found: {INPUT_PATH}", file=sys.stderr)
         sys.exit(1)
 

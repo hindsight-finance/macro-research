@@ -5,12 +5,17 @@ from pathlib import Path
 import sys
 
 import polars as pl
-import pyarrow.parquet as pq
 
+from utils import data_sources
 from utils.minute_bars import MARKET_TZ
-from utils.tick_data import TICK_PRICE_DENOMINATOR, get_tick_schema
+from utils.tick_data import (
+    TICK_PRICE_DENOMINATOR,
+    get_tick_schema,
+    open_parquet_file,
+    scan_source,
+)
 
-INPUT_PATH = Path("input-data/merged_nq_ticks.parquet")
+INPUT_PATH = data_sources.tick_data_url()
 DEFAULT_BARRIER_PATH = Path("outputs/nq_macro_1550_barrier.parquet")
 PREMACRO_OUTPUT_PATH = Path("outputs/nq_macro_vwap_premacro.parquet")
 PREMACRO_SUMMARY_OUTPUT_PATH = Path("outputs/nq_macro_vwap_premacro_summary.parquet")
@@ -128,7 +133,7 @@ def _scan_ticks(
 ) -> pl.LazyFrame:
     _validate_tick_schema(path)
     ts_et = pl.col("ts_event").dt.convert_time_zone(MARKET_TZ)
-    lf = pl.scan_parquet(path).select(
+    lf = scan_source(path).select(
         pl.col("ts_event").cast(UTC_NS).alias("ts_event"),
         pl.col("intra_ts_rank").cast(pl.Int64),
         pl.col("price_ticks").cast(pl.Int64),
@@ -626,7 +631,7 @@ def _finalize_feature_row(date, state: dict, prefixes: tuple[str, ...], feature_
 def _compute_streaming_features(input_path: str | Path, batch_size: int = 750_000) -> tuple[pl.DataFrame, pl.DataFrame]:
     _validate_tick_schema(input_path)
     states: dict[object, dict] = {}
-    parquet_file = pq.ParquetFile(input_path)
+    parquet_file = open_parquet_file(input_path)
     columns = ["ts_event", "intra_ts_rank", "price_ticks", "size"]
     for batch in parquet_file.iter_batches(columns=columns, batch_size=batch_size):
         batch_df = _batch_aggregate(pl.from_arrow(batch))
@@ -662,7 +667,7 @@ def _next_month(value: datetime) -> datetime:
 
 def _tick_month_ranges(path: str | Path) -> list[tuple[datetime, datetime]]:
     _validate_tick_schema(path)
-    bounds = pl.scan_parquet(path).select(
+    bounds = scan_source(path).select(
         pl.col("ts_event").cast(UTC_NS).min().alias("min_ts"),
         pl.col("ts_event").cast(UTC_NS).max().alias("max_ts"),
     ).collect()
@@ -735,7 +740,7 @@ def write_macro_vwap_features(
 
 
 def main() -> None:
-    if not INPUT_PATH.exists():
+    if not data_sources.source_exists(INPUT_PATH):
         print(f"[ERROR] Input not found: {INPUT_PATH}", file=sys.stderr)
         sys.exit(1)
     outputs = write_macro_vwap_features()

@@ -12,7 +12,7 @@ hierarchy in tags + frontmatter (see [[README]]).
 ## Concepts
 
 **Structure & infrastructure**
-[[macro-window]] (→ [[macro-open-1550]] · [[macro-close-1559]]) · [[session-windows]] · [[time-handling]] · [[data-pipeline]] · [[tick-data]] · [[macro-outcome]]
+[[macro-window]] (→ [[macro-open-1550]] · [[macro-close-1559]]) · [[session-windows]] · [[time-handling]] · [[data-pipeline]] · [[tick-data]] · [[macro-outcome]] · [[remote-compute]]
 
 **Microstructure features**
 [[volume-delta]] · [[cumulative-delta-imbalance]] · [[anchored-vwap]] · [[fair-value-gap]] · [[tick-density]] · [[barrier-context]] · [[mae-mfe]]
@@ -53,7 +53,7 @@ Use the tag pane or color graph groups by family:
 
 - `#feature/vwap` · `#feature/volume-delta` · `#feature/fvg` · `#feature/tick-density` · `#feature/trend`
 - `#window/macro` (`/open-1550`, `/close-1559`) · `#window/pm` · `#window/h3pm`
-- `#infra/time` · `#infra/pipeline` · `#infra/ticks`
+- `#infra/time` · `#infra/pipeline` · `#infra/ticks` · `#infra/remote-compute`
 
 With the Dataview plugin, list a family's studies and their params, e.g.:
 

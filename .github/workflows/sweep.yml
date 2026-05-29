@@ -1,0 +1,165 @@
+name: sweep
+
+# Parameter sweep for the trend-modeling walk-forward harness, fanned out across
+# parallel runners (public repo -> unlimited minutes; matrix jobs run concurrently).
+#
+#   build  -> build the modeling table once from the (local, R2-mirrored) minute parquet
+#   run    -> matrix over ridge-alpha values, each a parallel run-experiments job
+#   report -> summarize all experiment outputs into one table
+#
+# Uses the same R2 secrets as backtest.yml (R2_BUCKET, R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL). The built table and per-alpha results are
+# passed between jobs as workflow artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      table_input:
+        description: Minute parquet the modeling table is built from (path within outputs/ mirror)
+        type: string
+        required: true
+        default: outputs/nq_minute_base.parquet
+      instrument:
+        description: Instrument
+        type: choice
+        required: true
+        default: NQ
+        options: [NQ, ES]
+      session_name:
+        description: Session window
+        type: choice
+        required: true
+        default: 3:50pm-4pm
+        options:
+          - 1pm-3pm
+          - 3pm-3:50pm
+          - 3:50pm-4pm
+      experiment_group:
+        description: Experiment group
+        type: choice
+        required: true
+        default: ridge_alpha_sweep
+        options:
+          - representation_sweep
+          - ridge_alpha_sweep
+          - post_adx_ablation
+          - post_adx_persistence_rewrites
+          - containment_v2
+      ridge_alphas:
+        description: Comma-separated ridge-alpha values to fan out over
+        type: string
+        required: true
+        default: "0.3,1.0,3.0,10.0"
+
+env:
+  R2_BUCKET: ${{ secrets.R2_BUCKET }}
+  RCLONE_CONFIG_R2_TYPE: s3
+  RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT_URL }}
+  RCLONE_CONFIG_R2_REGION: auto
+  RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      alphas: ${{ steps.parse.outputs.alphas }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+      - name: Pull derived outputs/ from R2
+        run: |
+          mkdir -p outputs
+          rclone copy "r2:${R2_BUCKET}/outputs" ./outputs --fast-list --transfers 16
+      - name: Build modeling table
+        run: |
+          mkdir -p outputs/trend_modeling/cache
+          python -m features.trend.modeling.cli build-table \
+            --input-path "${{ inputs.table_input }}" \
+            --instrument "${{ inputs.instrument }}" \
+            --session-name "${{ inputs.session_name }}" \
+            --output-path outputs/trend_modeling/cache/sweep_table.parquet
+      - name: Parse ridge-alpha list into a JSON matrix
+        id: parse
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          raw = "${{ inputs.ridge_alphas }}"
+          alphas = [a.strip() for a in raw.split(",") if a.strip()]
+          print("alphas=" + json.dumps(alphas))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sweep-table
+          path: outputs/trend_modeling/cache/sweep_table.parquet
+          retention-days: 7
+
+  run:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        ridge_alpha: ${{ fromJSON(needs.build.outputs.alphas) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: sweep-table
+          path: outputs/trend_modeling/cache
+      - name: Run experiments (ridge_alpha=${{ matrix.ridge_alpha }})
+        run: |
+          python -m features.trend.modeling.cli run-experiments \
+            --table-path outputs/trend_modeling/cache/sweep_table.parquet \
+            --session-name "${{ inputs.session_name }}" \
+            --experiment-group "${{ inputs.experiment_group }}" \
+            --ridge-alpha "${{ matrix.ridge_alpha }}" \
+            --output-dir "experiments/alpha_${{ matrix.ridge_alpha }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sweep-experiments-alpha-${{ matrix.ridge_alpha }}
+          path: experiments/
+          retention-days: 14
+
+  report:
+    needs: run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sweep-experiments-alpha-*
+          path: experiments
+          merge-multiple: true
+      - name: Summarize all experiments
+        run: |
+          python -m features.trend.modeling.cli summarize \
+            --experiments-dir experiments \
+            --output-path experiments_summary.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sweep-summary
+          path: experiments_summary.csv
+          retention-days: 30

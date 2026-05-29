@@ -5,10 +5,11 @@ import sys
 
 import polars as pl
 
+from utils import data_sources
 from utils.minute_bars import MARKET_TZ
-from utils.tick_data import TICK_PRICE_DENOMINATOR
+from utils.tick_data import TICK_PRICE_DENOMINATOR, scan_source
 
-TICK_INPUT_PATH = Path("input-data/merged_nq_ticks.parquet")
+TICK_INPUT_PATH = data_sources.tick_data_url()
 OUTPUT_PATH = Path("outputs/nq_macro_tick_range_context.parquet")
 SUMMARY_OUTPUT_PATH = Path("outputs/nq_macro_tick_range_context_summary.parquet")
 
@@ -545,7 +546,7 @@ def write_macro_tick_range_context(
     output_path: str | Path = OUTPUT_PATH,
     summary_output_path: str | Path = SUMMARY_OUTPUT_PATH,
 ) -> tuple[Path, Path]:
-    study = build_macro_tick_range_context(pl.scan_parquet(input_path))
+    study = build_macro_tick_range_context(scan_source(input_path))
     summary = summarize_macro_tick_range_context(study)
     output = Path(output_path)
     summary_output = Path(summary_output_path)
@@ -557,7 +558,7 @@ def write_macro_tick_range_context(
 
 
 def main() -> None:
-    if not TICK_INPUT_PATH.exists():
+    if not data_sources.source_exists(TICK_INPUT_PATH):
         print(f"[ERROR] Input not found: {TICK_INPUT_PATH}", file=sys.stderr)
         sys.exit(1)
     output, summary = write_macro_tick_range_context()
