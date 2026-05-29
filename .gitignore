@@ -37,3 +37,6 @@ features/trend/test/regime_charts/
 
 # Claude Code personal settings
 .claude/settings.local.json
+
+# Local research idea dump — kept out of the (public) repo
+ideadump.md
