@@ -51,10 +51,11 @@ graph-filterable without adding nodes.
 ```
 asset/nq
 window/{macro, macro/open-1550, macro/close-1559, h3pm, post, pm}
-feature/vwap/{anchor-0930, anchor-1300, anchor-1500, anchor-1550, anchor-1555}
+feature/vwap/{anchor-0930, anchor-1300, anchor-1500, anchor-1550, anchor-1555, retouch-1550}
 feature/volume-delta/{imbalance-pre350, imbalance-pre59, bucket-5s, bucket-1m}
 feature/fvg/{alignment, excursion, success-context, minute-volume, delta-dominance}
 feature/{tick-density, barrier, mae-mfe, outcome}
+feature/barrier/{break-direction}
 feature/trend/{adx, atr, dra, irr, lag-hurst, mss, spd, efficiency-ratio,
                variance-ratio, containment, trendability, state-detector, regime}
 infra/{time, pipeline, ticks}

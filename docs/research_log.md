@@ -9,3 +9,4 @@ This index tracks requested/completed experiment logs. Individual logs live unde
 | ID | Experiment | Status | Primary outputs | Notes |
 | --- | --- | --- | --- | --- |
 | 0001 | [Macro VWAP Features](experiments/0001-macro-vwap-features.md) | Exploratory | `outputs/nq_macro_vwap_premacro.parquet`, `outputs/nq_macro_vwap_intramacro.parquet` | Ongoing VWAP context thread; update as barrier/VWAP distribution work evolves. |
+| 0002 | [First-10s VWAP-Retouch Event Study](experiments/0002-macro-1550-vwap-retouch.md) | Exploratory | `outputs/nq_macro_1550_vwap_retouch.parquet`, `outputs/nq_macro_1550_vwap_retouch_summary.parquet` | First-10s break-direction bias + 15:50-VWAP retouch; 1,252 dates (2020-09→2025-11). Descriptive only; Stage-2 entry/exit backtest pending. |

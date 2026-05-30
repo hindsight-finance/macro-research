@@ -15,7 +15,7 @@ hierarchy in tags + frontmatter (see [[README]]).
 [[macro-window]] (→ [[macro-open-1550]] · [[macro-close-1559]]) · [[session-windows]] · [[time-handling]] · [[data-pipeline]] · [[tick-data]] · [[macro-outcome]] · [[remote-compute]]
 
 **Microstructure features**
-[[volume-delta]] · [[cumulative-delta-imbalance]] · [[anchored-vwap]] · [[fair-value-gap]] · [[tick-density]] · [[barrier-context]] · [[mae-mfe]]
+[[volume-delta]] · [[cumulative-delta-imbalance]] · [[anchored-vwap]] · [[fair-value-gap]] · [[tick-density]] · [[barrier-context]] (→ [[first-10s-break-direction]]) · [[mae-mfe]]
 
 **Trend & regime**
 [[trend-regime]] · [[adx]] · [[atr-range-ratio]] · [[dra]] · [[irr]] · [[lag-autocorr-hurst]] · [[mss]] · [[swing-point-density]] · [[efficiency-ratio]] · [[variance-ratio]] · [[containment]] · [[trendability]] · [[state-detector]] · [[historical-regimes]]
@@ -27,6 +27,7 @@ Ordered roughly by thread. Status is the node's own; formal logs live in `docs/r
 **Macro window — direction, timing, flow**
 - [[0001-macro-vwap-features]] — anchored-VWAP context for macro direction *(formal log)*
 - [[macro-vwap-barrier-context]] — first-10s barrier vs VWAP vs barrier+VWAP
+- [[macro-1550-vwap-retouch]] — first-10s break-direction bias + 15:50-VWAP retouch, forward outcomes *(formal log)*
 - [[macro-1550-delta-impulse]] — does pre-15:50 delta predict the 15:50 opening impulse
 - [[macro-delta-reversal]] — does pre-close delta predict reversal into the 15:59 close
 - [[macro-bucket-path]] — early-10s conviction → continuation / fade / churn
