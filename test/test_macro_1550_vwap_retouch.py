@@ -72,3 +72,124 @@ def test_scan_macro_window_missing_column_raises(tmp_path):
         assert "Missing tick columns" in str(exc)
     else:
         raise AssertionError("expected ValueError for missing tick columns")
+
+
+BASE_EST = dt.datetime(2024, 3, 7, 20, 50, 0, tzinfo=UTC)  # 15:50:00 ET on an EST date
+
+
+def _day(ticks):
+    """ticks: list of (offset_seconds_from_1550, price, size[, rank]).
+
+    Builds a day frame in the shape `_scan_macro_window` produces (et_second/price present).
+    """
+    rows = []
+    for i, t in enumerate(ticks):
+        off, price, size = t[0], t[1], t[2]
+        rank = t[3] if len(t) > 3 else i
+        rows.append(
+            {
+                "ts_event": BASE_EST + dt.timedelta(seconds=off),
+                "intra_ts_rank": rank,
+                "price_ticks": int(round(price * 4)),
+                "size": size,
+                "date": dt.date(2024, 3, 7),
+                "et_second": m.S_1550 + off,
+                "price": float(price),
+            }
+        )
+    return pl.DataFrame(
+        rows,
+        schema={
+            "ts_event": pl.Datetime("ns", time_zone="UTC"),
+            "intra_ts_rank": pl.Int64,
+            "price_ticks": pl.Int64,
+            "size": pl.Int64,
+            "date": pl.Date,
+            "et_second": pl.Int32,
+            "price": pl.Float64,
+        },
+    )
+
+
+# first-10s range: high=101, low=99, vwap=100  (used by several cases)
+FIRST10 = [(0, 100.0, 1), (1, 101.0, 1), (2, 99.0, 1)]
+
+
+def test_clean_high_break_bullish_with_retouch_and_continuation():
+    day = _day(FIRST10 + [(15, 102.0, 1), (20, 100.0, 1), (30, 105.0, 1)])
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["has_first10"] is True
+    assert r["high_10s"] == 101.0 and r["low_10s"] == 99.0 and r["vwap_10s_frozen"] == 100.0
+    assert r["trigger_state"] == "triggered"
+    assert r["break_side"] == "high" and r["bias"] == "bullish"
+    assert r["break_price"] == 102.0 and r["break_time_s"] == 15
+    # retouch back down to the frozen VWAP (100 <= 100 + 0.25)
+    assert r["retouch_frozen_occurred"] is True
+    assert r["retouch_frozen_price"] == 100.0 and r["retouch_frozen_time_s"] == 20
+    assert r["retouch_frozen_lag_s"] == 5
+    # forward (signed by bias) to macro close = 105
+    assert r["fwd_break_1559_points"] == 3.0          # 105 - 102
+    assert r["fwd_retouch_frozen_1559_points"] == 5.0  # 105 - 100
+    assert r["mfe_retouch_frozen_points"] == 5.0 and r["mae_retouch_frozen_points"] == 0.0
+    # validation: macro closed up
+    assert r["macro_trend_state"] == "bullish"
+    assert r["bias_matches_macro"] is True
+
+
+def test_clean_low_break_bearish():
+    day = _day(FIRST10 + [(15, 98.0, 1), (20, 100.0, 1), (30, 95.0, 1)])
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["break_side"] == "low" and r["bias"] == "bearish"
+    assert r["break_price"] == 98.0
+    assert r["retouch_frozen_occurred"] is True and r["retouch_frozen_price"] == 100.0
+    assert r["fwd_break_1559_points"] == 3.0   # bearish: 98 - 95
+    assert r["macro_trend_state"] == "bearish" and r["bias_matches_macro"] is True
+
+
+def test_whipsaw_first_break_wins():
+    # low breaks at +12 before high breaks at +14 -> bias bearish
+    day = _day(FIRST10 + [(12, 98.0, 1), (14, 102.0, 1), (30, 100.0, 1)])
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["break_side"] == "low" and r["bias"] == "bearish" and r["break_time_s"] == 12
+
+
+def test_no_break_is_no_trigger():
+    # post ticks only touch the levels (non-strict) -> no break
+    day = _day(FIRST10 + [(15, 100.0, 1), (20, 101.0, 1), (30, 99.0, 1)])
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["trigger_state"] == "no_trigger"
+    assert r["break_side"] is None and r["bias"] is None
+    assert r["fwd_break_1559_points"] is None
+    assert r["has_first10"] is True and r["high_10s"] == 101.0
+
+
+def test_break_but_no_retouch_runaway():
+    day = _day(FIRST10 + [(15, 102.0, 1), (20, 103.0, 1), (30, 104.0, 1)])
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["trigger_state"] == "triggered" and r["break_side"] == "high"
+    assert r["retouch_frozen_occurred"] is False and r["retouch_rolling_occurred"] is False
+    assert r["fwd_break_1559_points"] == 2.0           # 104 - 102
+    assert r["fwd_retouch_frozen_1559_points"] is None
+
+
+def test_late_retouch_nulls_passed_horizon():
+    # a 15:51:40 tick provides the 15:54 horizon price; retouch happens at 15:55:20 (>= S_1555)
+    day = _day(FIRST10 + [(15, 102.0, 1), (100, 103.0, 1), (320, 100.0, 1), (340, 106.0, 1)])
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["retouch_frozen_occurred"] is True and r["retouch_frozen_time_s"] == 320
+    assert r["fwd_retouch_frozen_1554_points"] is None   # anchor (et 15:55:20) >= 15:55 cutoff
+    assert r["fwd_retouch_frozen_1559_points"] is not None
+
+
+def test_empty_first10_returns_blank():
+    day = _day([(15, 100.0, 1), (20, 101.0, 1)])  # nothing in [0, 10)
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["has_first10"] is False
+    assert r["break_side"] is None and r["vwap_10s_frozen"] is None
+
+
+def test_exact_tie_same_ts_and_rank_is_stable():
+    # two identical post ticks (same ts + rank): must not crash; first break detected
+    day = _day(FIRST10 + [(15, 102.0, 1, 0), (15, 102.0, 1, 0), (30, 104.0, 1)])
+    r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
+    assert r["break_side"] == "high" and r["break_price"] == 102.0
