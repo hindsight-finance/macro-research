@@ -131,6 +131,13 @@ def test_clean_high_break_bullish_with_retouch_and_continuation():
     assert r["fwd_break_1559_points"] == 3.0          # 105 - 102
     assert r["fwd_retouch_frozen_1559_points"] == 5.0  # 105 - 100
     assert r["mfe_retouch_frozen_points"] == 5.0 and r["mae_retouch_frozen_points"] == 0.0
+    # rolling-VWAP retouch: cum-VWAP at tick 5 (offsets 0..4 = 100,101,99,102,100) = 502/5 = 100.4
+    assert r["retouch_rolling_occurred"] is True
+    assert r["retouch_rolling_time_s"] == 20
+    assert r["retouch_rolling_price"] == 100.0
+    assert r["retouch_rolling_lag_s"] == 5
+    assert r["vwap_rolling_at_retouch"] == 100.4
+    assert r["fwd_retouch_rolling_1559_points"] == 5.0   # bullish: 105 - 100
     # validation: macro closed up
     assert r["macro_trend_state"] == "bullish"
     assert r["bias_matches_macro"] is True

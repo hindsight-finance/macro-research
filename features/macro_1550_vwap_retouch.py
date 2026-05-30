@@ -203,8 +203,15 @@ def detect_retouch_events(
     barrier_seconds: int = DEFAULT_BARRIER_SECONDS,
     touch: float = TOUCH_THRESHOLD_POINTS,
 ) -> dict:
-    """One row of retouch-event features for a single macro date. Pure (no I/O)."""
+    """One row of retouch-event features for a single macro date. Pure (no I/O).
+
+    Precondition: ``day_ticks`` must contain only ticks with ``et_second >= S_1550``
+    (the 15:50-anchored macro window), since the rolling VWAP is cum-summed from the
+    first row.  The standard callsite (``build_macro_1550_vwap_retouch`` via
+    ``_scan_macro_window``) already guarantees this.
+    """
     win = day_ticks.sort("ts_event", "intra_ts_rank")
+    win = win.filter(pl.col("et_second") >= S_1550)
     macro = win.filter((pl.col("et_second") >= S_1550) & (pl.col("et_second") < S_1600))
     tick_count_macro = macro.height
 
