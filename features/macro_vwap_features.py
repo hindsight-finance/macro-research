@@ -11,7 +11,7 @@ from utils.minute_bars import MARKET_TZ
 from utils.tick_data import (
     TICK_PRICE_DENOMINATOR,
     get_tick_schema,
-    open_parquet_file,
+    iter_tick_batches,
     scan_source,
 )
 
@@ -631,10 +631,8 @@ def _finalize_feature_row(date, state: dict, prefixes: tuple[str, ...], feature_
 def _compute_streaming_features(input_path: str | Path, batch_size: int = 750_000) -> tuple[pl.DataFrame, pl.DataFrame]:
     _validate_tick_schema(input_path)
     states: dict[object, dict] = {}
-    parquet_file = open_parquet_file(input_path)
-    columns = ["ts_event", "intra_ts_rank", "price_ticks", "size"]
-    for batch in parquet_file.iter_batches(columns=columns, batch_size=batch_size):
-        batch_df = _batch_aggregate(pl.from_arrow(batch))
+    for batch in iter_tick_batches(input_path, batch_size=batch_size):
+        batch_df = _batch_aggregate(batch)
         if batch_df.is_empty():
             continue
         for row in batch_df.iter_rows(named=True):

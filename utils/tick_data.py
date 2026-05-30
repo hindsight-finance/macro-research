@@ -26,17 +26,33 @@ def _resolve(path: str | Path | None, storage_options: dict | None) -> tuple[str
     return path, storage_options
 
 
+def _with_price_ticks(lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Ensure a canonical ``price_ticks`` column exists.
+
+    The sanitized local file stores ``price_ticks`` (UInt32); the R2 data lake stores a
+    float ``price``. When only ``price`` is present, derive ``price_ticks`` losslessly
+    (NQ trades sit on the 0.25 grid, so ``round(price * 4)`` is exact), so every
+    downstream reader that selects ``price_ticks`` works against either layout.
+    """
+    names = lf.collect_schema().names()
+    if "price_ticks" not in names and "price" in names:
+        lf = lf.with_columns(price_ticks=(pl.col("price") * 4).round().cast(pl.UInt32))
+    return lf
+
+
 def scan_source(path: str | Path | None = None, *, storage_options: dict | None = None) -> pl.LazyFrame:
-    """Lazy scan of a parquet source (local path or R2 ``s3://`` URL), unprojected.
+    """Lazy scan of a parquet source (local path, R2 ``s3://`` URL, or glob), unprojected.
 
     ``storage_options`` are only attached when ``path`` is a remote URL, so a local
     read is never handed R2 credentials even when they are present in the environment
     (a runner reads remote ticks but local derived parquet within the same process).
+    A ``price_ticks`` column is synthesized from ``price`` when the source only has the
+    float price (the data-lake tick schema).
     """
     path, storage_options = _resolve(path, storage_options)
     if not data_sources.is_remote(path):
         storage_options = None
-    return pl.scan_parquet(path, storage_options=storage_options)
+    return _with_price_ticks(pl.scan_parquet(path, storage_options=storage_options))
 
 
 def get_tick_schema(path: str | Path | None = None, *, storage_options: dict | None = None) -> pa.Schema:
@@ -75,6 +91,81 @@ def open_parquet_file(path: str | Path | None = None, *, storage_options: dict |
         )
         return pq.ParquetFile(filesystem.open_input_file(f"{parsed.netloc}{parsed.path}"))
     return pq.ParquetFile(path)
+
+
+def _s3_filesystem(storage_options: dict | None):
+    import pyarrow.fs as pafs
+
+    opts = storage_options or {}
+    return pafs.S3FileSystem(
+        access_key=opts.get("aws_access_key_id"),
+        secret_key=opts.get("aws_secret_access_key"),
+        endpoint_override=opts.get("endpoint_url"),
+        region=opts.get("aws_region") or "auto",
+    )
+
+
+def _expand_tick_sources(path: str | Path, storage_options: dict | None):
+    """Expand a path/glob to a concrete list of parquet files.
+
+    Returns ``(filesystem, files)`` where ``filesystem`` is a pyarrow S3 filesystem for
+    remote sources (and ``None`` for local). Supports the data lake's year-sharded glob
+    (``s3://bucket/NQ/tick/*_merged_nq.parquet``) as well as a single local/remote file.
+    """
+    import fnmatch
+    import posixpath
+    from urllib.parse import urlparse
+
+    p = str(path)
+    if data_sources.is_remote(p):
+        fs = _s3_filesystem(storage_options)
+        parsed = urlparse(p)
+        key = f"{parsed.netloc}{parsed.path}"  # bucket/key
+        if any(ch in key for ch in "*?["):
+            import pyarrow.fs as pafs
+
+            prefix, pattern = posixpath.split(key)
+            infos = fs.get_file_info(pafs.FileSelector(prefix, recursive=False))
+            files = sorted(
+                i.path for i in infos
+                if i.type == pafs.FileType.File and fnmatch.fnmatch(posixpath.basename(i.path), pattern)
+            )
+        else:
+            files = [key]
+        return fs, files
+
+    import glob as _glob
+
+    files = sorted(_glob.glob(p)) or [p]
+    return None, files
+
+
+def iter_tick_batches(
+    path: str | Path | None = None,
+    *,
+    batch_size: int = 750_000,
+    storage_options: dict | None = None,
+):
+    """Yield polars DataFrames of tick columns, streamed across one or many files.
+
+    Handles the data-lake layout transparently: expands a year-sharded glob to its files
+    and synthesizes ``price_ticks`` from ``price`` per batch, so callers always receive
+    ``ts_event, intra_ts_rank, price_ticks, size``. Memory stays bounded to one batch.
+    """
+    import pyarrow.parquet as pq
+
+    path, storage_options = _resolve(path, storage_options)
+    filesystem, files = _expand_tick_sources(path, storage_options)
+    for f in files:
+        pf = pq.ParquetFile(filesystem.open_input_file(f)) if filesystem is not None else pq.ParquetFile(f)
+        names = pf.schema_arrow.names
+        price_col = "price_ticks" if "price_ticks" in names else "price"
+        read_cols = ["ts_event", "intra_ts_rank", price_col, "size"]
+        for batch in pf.iter_batches(columns=read_cols, batch_size=batch_size):
+            df = pl.from_arrow(batch)
+            if price_col == "price":
+                df = df.with_columns(price_ticks=(pl.col("price") * 4).round().cast(pl.UInt32)).drop("price")
+            yield df
 
 
 def _dt(value: Any) -> pl.Expr:

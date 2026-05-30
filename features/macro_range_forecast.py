@@ -381,7 +381,7 @@ def run_experiment(
 
 
 def write_macro_range_forecasts(
-    minute_path: str | Path = "outputs/nq_1m.parquet",
+    minute_path: str | Path = data_sources.minute_nq_url("outputs/nq_1m.parquet"),
     events_path: str | Path = data_sources.econ_events_url(),
     output_dir: str | Path = "outputs",
     holdout_fraction: float = 0.20,
@@ -394,7 +394,10 @@ def write_macro_range_forecasts(
     xgb_max_depth: int = 3,
     xgb_learning_rate: float = 0.05,
 ) -> tuple[Path, Path]:
-    minute_bars = pl.read_parquet(minute_path)
+    minute_bars = pl.read_parquet(
+        minute_path,
+        storage_options=data_sources.storage_options() if data_sources.is_remote(minute_path) else None,
+    )
     economic_events = pl.read_parquet(
         events_path,
         storage_options=data_sources.storage_options() if data_sources.is_remote(events_path) else None,
@@ -437,7 +440,7 @@ def write_macro_range_forecasts(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Macro range forecasting study")
-    parser.add_argument("--minute-path", default="outputs/nq_1m.parquet")
+    parser.add_argument("--minute-path", default=data_sources.minute_nq_url("outputs/nq_1m.parquet"))
     parser.add_argument("--events-path", default=data_sources.econ_events_url())
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--holdout-fraction", type=float, default=0.20)

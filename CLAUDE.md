@@ -51,25 +51,32 @@ and don't commit large generated artifacts unless they are intentional deliverab
 ## Running studies on GitHub Actions (remote compute)
 
 Any study can run on a GitHub-hosted runner instead of locally — useful when the local box
-is RAM-constrained. Source data is served from **Cloudflare R2** (never committed): the
-time-sorted tick parquet is *range-read in place* (polars predicate pushdown fetches only the
-row groups a window filter touches — it never downloads the 2.8 GB file), and the small derived
-`outputs/` tree is `rclone`-synced around each run.
+is RAM-constrained. Source data is served from the **Cloudflare R2 `futures-data` lake**
+(never committed): the year-sharded NQ tick files (`NQ/tick/*_merged_nq.parquet`) are
+*range-read in place* via a glob (polars predicate pushdown fetches only the row groups a
+window filter touches — it never downloads the files), the `NQ/NQ-*.ohlcv-1m.parquet` file is
+the minute base, and the small derived `outputs/` tree is `rclone`-synced to
+`macro-research/outputs` around each run.
 
+- **Schema bridge.** The lake stores a float `price`; the code expects `price_ticks` (UInt32).
+  `utils/tick_data.py` synthesizes `price_ticks = round(price*4)` (lossless on the 0.25 grid)
+  so studies are layout-agnostic.
 - **Mechanism.** `utils/data_sources.py` resolves data location + R2 `storage_options` from env
-  (`TICK_DATA_URL`, `ECON_EVENTS_URL`, `R2_*`); with env unset it falls back to local
-  `input-data/`, so **local runs are unchanged**. Keep tick/source reads funnelled through
-  `utils/tick_data.py` (`scan_source`, `get_tick_schema`, `open_parquet_file`) so they pick this
-  up — don't call `pl.scan_parquet`/`pq.ParquetFile` on a raw source directly.
+  (`TICK_DATA_URL`, `MINUTE_NQ_URL`, `ECON_EVENTS_URL`, `R2_*`); with env unset everything falls
+  back to local `input-data/`/`outputs/`, so **local runs are unchanged**. Funnel tick reads
+  through `utils/tick_data.py` (`scan_source`, `get_tick_schema`, `iter_tick_batches`) and minute
+  reads through `utils/minute_bars.load_minute_bars` (all R2-aware) — don't call
+  `pl.scan_parquet`/`pq.ParquetFile` on a raw source directly.
 - **Trigger.** `gh workflow run backtest.yml -f target=<study> [-f extra_args="..."]` runs one
   study (`target` is a curated choice list); `sweep.yml` fans a trend ridge-alpha sweep across
   parallel matrix jobs. Results upload as run artifacts and sync to the R2 `outputs/` mirror.
-- **Caveat.** `macro_range_forecast` defaults to `--xgb-device cuda`; runners are CPU-only, so
-  pass `extra_args="--xgb-device cpu"`.
+- **Caveats.** `macro_range_forecast` defaults to `--xgb-device cuda` (runners are CPU-only, pass
+  `extra_args="--xgb-device cpu"`) **and** needs an economic-events parquet, which is not in the
+  lake yet — upload one and set `ECON_EVENTS_URL` before running it on Actions.
 
-Full setup (R2 bucket layout, one-time upload, secrets, going public, range-read verification)
-is in `docs/github-actions-r2.md`. The two 1m CSVs never go to Actions — `session_tagger.py` is
-a local prep step that produces the minute-base parquet seeded into the R2 mirror.
+Full setup (lake layout, secrets, going public, range-read verification) is in
+`docs/github-actions-r2.md`. The lake's `ohlcv-1m` file is already canonical, so
+`session_tagger.py` (the local CSV→parquet prep) is not needed on Actions.
 
 ## Time handling (critical, easy to get wrong)
 

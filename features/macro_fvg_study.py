@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
+from utils import data_sources
+
 try:
     from utils.minute_bars import (
         build_market_time_columns,
@@ -39,7 +41,7 @@ except ModuleNotFoundError:
     )
     from volume_delta import OUTPUT_MACRO_5S_PATH
 
-INPUT_PATH = Path("outputs/nq_minute_base.parquet")
+INPUT_PATH = data_sources.minute_nq_url("outputs/nq_minute_base.parquet")
 EVENTS_OUTPUT_PATH = Path("outputs/nq_macro_fvg_events.parquet")
 SUMMARY_OUTPUT_PATH = Path("outputs/nq_macro_fvg_summary.parquet")
 FIGURES_DIR = Path("outputs/figs/fvg")

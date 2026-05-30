@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from utils import data_sources
 from utils.minute_bars import (
     build_market_time_columns,
     derive_session_window,
@@ -18,7 +19,7 @@ from utils.minute_bars import (
     normalize_minute_bars,
 )
 
-INPUT_PATH = Path("outputs/nq_minute_base.parquet")
+INPUT_PATH = data_sources.minute_nq_url("outputs/nq_minute_base.parquet")
 OUTPUT_PATH = Path("outputs/nq_macro_outcomes.parquet")
 MACRO_WINDOW_NAME = "MACRO"
 POST_WINDOW_CANDIDATES = {"post", "postclose", "post_close", "postmacro", "POST", "Post", "PostClose"}
@@ -163,7 +164,7 @@ def main():
     in_path = INPUT_PATH
     out_path = OUTPUT_PATH
 
-    if not in_path.exists():
+    if not data_sources.source_exists(in_path):
         print(f"[ERROR] Input not found: {in_path}", file=sys.stderr)
         sys.exit(1)
 

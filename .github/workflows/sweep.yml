@@ -3,22 +3,17 @@ name: sweep
 # Parameter sweep for the trend-modeling walk-forward harness, fanned out across
 # parallel runners (public repo -> unlimited minutes; matrix jobs run concurrently).
 #
-#   build  -> build the modeling table once from the (local, R2-mirrored) minute parquet
+#   build  -> pull the instrument ohlcv-1m file from the R2 lake, build the modeling table
 #   run    -> matrix over ridge-alpha values, each a parallel run-experiments job
 #   report -> summarize all experiment outputs into one table
 #
-# Uses the same R2 secrets as backtest.yml (R2_BUCKET, R2_ACCESS_KEY_ID,
-# R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL). The built table and per-alpha results are
-# passed between jobs as workflow artifacts.
+# Uses the same R2 secrets as backtest.yml. build-table reads the minute file with pandas
+# (not the R2-aware polars path), so the build job downloads it locally first. The built
+# table and per-alpha results are passed between jobs as workflow artifacts.
 
 on:
   workflow_dispatch:
     inputs:
-      table_input:
-        description: Minute parquet the modeling table is built from (path within outputs/ mirror)
-        type: string
-        required: true
-        default: outputs/nq_minute_base.parquet
       instrument:
         description: Instrument
         type: choice
@@ -76,23 +71,28 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
-      - name: Pull derived outputs/ from R2
+      - name: Pull instrument ohlcv-1m from the R2 lake
         run: |
-          mkdir -p outputs
-          rclone copy "r2:${R2_BUCKET}/outputs" ./outputs --fast-list --transfers 16
+          instr="${{ inputs.instrument }}"
+          mkdir -p lake
+          rclone copy "r2:${R2_BUCKET}/${instr}" ./lake --include "${instr}-*.ohlcv-1m.parquet" --fast-list
       - name: Build modeling table
         run: |
+          set -euo pipefail
+          instr="${{ inputs.instrument }}"
+          minute_file="$(ls lake/${instr}-*.ohlcv-1m.parquet | head -1)"
+          echo "minute file: ${minute_file}"
           mkdir -p outputs/trend_modeling/cache
           python -m features.trend.modeling.cli build-table \
-            --input-path "${{ inputs.table_input }}" \
-            --instrument "${{ inputs.instrument }}" \
+            --input-path "${minute_file}" \
+            --instrument "${instr}" \
             --session-name "${{ inputs.session_name }}" \
             --output-path outputs/trend_modeling/cache/sweep_table.parquet
       - name: Parse ridge-alpha list into a JSON matrix
         id: parse
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os
+          import json
           raw = "${{ inputs.ridge_alphas }}"
           alphas = [a.strip() for a in raw.split(",") if a.strip()]
           print("alphas=" + json.dumps(alphas))

@@ -67,14 +67,14 @@ def test_scan_source_forwards_storage_options_only_for_remote(monkeypatch):
     def fake_scan_parquet(path, storage_options=None):
         captured["path"] = path
         captured["storage_options"] = storage_options
-        return "LAZYFRAME"
+        return pl.LazyFrame()  # real LazyFrame so the price_ticks schema-peek works
 
     monkeypatch.setattr(tick_data.pl, "scan_parquet", fake_scan_parquet)
     for name, value in _R2_ENV.items():
         monkeypatch.setenv(name, value)
 
     # remote default path -> R2 options attached
-    assert tick_data.scan_source() == "LAZYFRAME"
+    assert isinstance(tick_data.scan_source(), pl.LazyFrame)
     assert captured["path"] == _R2_ENV["TICK_DATA_URL"]
     assert captured["storage_options"]["endpoint_url"].endswith("r2.cloudflarestorage.com")
 
@@ -82,6 +82,46 @@ def test_scan_source_forwards_storage_options_only_for_remote(monkeypatch):
     tick_data.scan_source("input-data/merged_nq_ticks.parquet")
     assert captured["path"] == "input-data/merged_nq_ticks.parquet"
     assert captured["storage_options"] is None
+
+
+def _write_price_float(path, ts="2025-01-02T20:50:00Z", price=18312.75):
+    pl.DataFrame(
+        {"ts_event": [ts], "intra_ts_rank": [0], "side": [2], "price": [price], "size": [5]}
+    ).with_columns(pl.col("ts_event").str.to_datetime(time_zone="UTC")).write_parquet(path)
+
+
+def test_scan_source_synthesizes_price_ticks_from_lake_price(tmp_path, _clear_env):
+    path = tmp_path / "lake.parquet"
+    _write_price_float(path)  # 18312.75 * 4 == 73251
+    df = tick_data.scan_source(path).collect()
+    assert "price_ticks" in df.columns
+    assert df["price_ticks"].to_list() == [73251]
+
+
+def test_get_tick_schema_accepts_price_only_lake_file(tmp_path, _clear_env):
+    path = tmp_path / "lake.parquet"
+    _write_price_float(path)
+    names = set(tick_data.get_tick_schema(path).names)
+    assert set(tick_data.TICK_COLUMNS) <= names  # price_ticks present despite source having only `price`
+
+
+def test_iter_tick_batches_normalizes_and_spans_glob(tmp_path, _clear_env):
+    _write_price_float(tmp_path / "2024_merged_nq.parquet", ts="2024-06-01T20:50:00Z", price=18000.0)
+    _write_price_float(tmp_path / "2025_merged_nq.parquet", ts="2025-06-01T20:50:00Z", price=18100.25)
+    glob = str(tmp_path / "*_merged_nq.parquet")
+    batches = list(tick_data.iter_tick_batches(glob))
+    for b in batches:
+        assert "price_ticks" in b.columns and "price" not in b.columns
+    assert sum(b.height for b in batches) == 2
+    pts = sorted(v for b in batches for v in b["price_ticks"].to_list())
+    assert pts == [72000, 72401]  # 18000*4, round(18100.25*4)
+
+
+def test_minute_nq_url_env_override(monkeypatch):
+    monkeypatch.delenv("MINUTE_NQ_URL", raising=False)
+    assert data_sources.minute_nq_url("outputs/nq_minute_base.parquet") == "outputs/nq_minute_base.parquet"
+    monkeypatch.setenv("MINUTE_NQ_URL", "s3://b/NQ/NQ.ohlcv-1m.parquet")
+    assert data_sources.minute_nq_url("outputs/x.parquet") == "s3://b/NQ/NQ.ohlcv-1m.parquet"
 
 
 def test_get_tick_schema_reads_local_fixture(tmp_path, _clear_env):

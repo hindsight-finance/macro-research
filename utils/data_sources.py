@@ -39,6 +39,16 @@ def econ_events_url() -> str:
     return os.environ.get("ECON_EVENTS_URL", LOCAL_ECON_EVENTS_PATH)
 
 
+def minute_nq_url(local_default: str) -> str:
+    """Location of the canonical NQ minute parquet.
+
+    Returns ``$MINUTE_NQ_URL`` when set (e.g. the data-lake ohlcv-1m object on R2),
+    else the caller's existing local default (callers differ: ``nq_minute_base.parquet``
+    vs ``nq_1m.parquet``), so local behavior is preserved per-script.
+    """
+    return os.environ.get("MINUTE_NQ_URL", local_default)
+
+
 def storage_options() -> dict[str, str] | None:
     """polars ``storage_options`` dict for R2, or ``None`` when running locally.
 

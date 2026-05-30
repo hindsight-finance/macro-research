@@ -4,20 +4,25 @@ from pathlib import Path
 
 import polars as pl
 
+from utils import data_sources
+
 MARKET_TZ = "America/New_York"
 UTC = "UTC"
 BASE_COLUMNS = ["datetime_utc", "Open", "High", "Low", "Close", "Volume"]
 OPTIONAL_BASE_COLUMNS = ["instrument"]
 
 
-def _read_any(path: str | Path) -> pl.DataFrame:
-    path = Path(path)
-    suffix = path.suffix.lower()
+def _read_any(path: str | Path, storage_options: dict | None = None) -> pl.DataFrame:
+    # Keep the source as a string so remote URLs aren't mangled by Path (s3://x -> s3:/x);
+    # only the extension is taken via Path. storage_options apply to remote URLs only.
+    source = str(path)
+    suffix = Path(source).suffix.lower()
+    opts = storage_options if data_sources.is_remote(source) else None
     if suffix == ".parquet":
-        return pl.read_parquet(path)
+        return pl.read_parquet(source, storage_options=opts)
     if suffix == ".csv":
-        return pl.read_csv(path, try_parse_dates=True)
-    raise ValueError(f"Unsupported input format: {path}")
+        return pl.read_csv(source, try_parse_dates=True, storage_options=opts)
+    raise ValueError(f"Unsupported input format: {source}")
 
 
 def _to_utc_expr(column: str) -> pl.Expr:
@@ -75,8 +80,11 @@ def normalize_minute_bars(df: pl.DataFrame) -> pl.DataFrame:
     return out
 
 
-def load_minute_bars(path: str | Path) -> pl.DataFrame:
-    return normalize_minute_bars(_read_any(path))
+def load_minute_bars(path: str | Path, *, storage_options: dict | None = None) -> pl.DataFrame:
+    # Auto-resolve R2 credentials for remote sources so callers can stay unchanged.
+    if storage_options is None and data_sources.is_remote(path):
+        storage_options = data_sources.storage_options()
+    return normalize_minute_bars(_read_any(path, storage_options=storage_options))
 
 
 def build_market_time_columns(df: pl.DataFrame) -> pl.DataFrame:

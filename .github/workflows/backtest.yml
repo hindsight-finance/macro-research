@@ -63,8 +63,12 @@ jobs:
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       R2_REGION: auto
-      TICK_DATA_URL: s3://${{ secrets.R2_BUCKET }}/source/merged_nq_ticks.parquet
-      ECON_EVENTS_URL: s3://${{ secrets.R2_BUCKET }}/source/economic_events.parquet
+      # Data-lake layout: year-sharded ticks (float `price`, normalized to price_ticks in
+      # utils.tick_data) read as one dataset via glob; the ohlcv-1m file is the minute base.
+      TICK_DATA_URL: s3://${{ secrets.R2_BUCKET }}/NQ/tick/*_merged_nq.parquet
+      MINUTE_NQ_URL: s3://${{ secrets.R2_BUCKET }}/NQ/NQ-*.ohlcv-1m.parquet
+      # ECON_EVENTS_URL intentionally unset: no economic-events parquet in the lake yet,
+      # so macro_range_forecast is not runnable on Actions until one is uploaded.
       # rclone "r2:" remote, configured entirely from env (no rclone.conf needed)
       RCLONE_CONFIG_R2_TYPE: s3
       RCLONE_CONFIG_R2_PROVIDER: Cloudflare
@@ -92,7 +96,7 @@ jobs:
       - name: Pull derived outputs/ (prerequisites) from R2
         run: |
           mkdir -p outputs
-          rclone copy "r2:${R2_BUCKET}/outputs" ./outputs --fast-list --transfers 16
+          rclone copy "r2:${R2_BUCKET}/macro-research/outputs" ./outputs --fast-list --transfers 16
 
       - name: Run study
         run: |
@@ -121,7 +125,7 @@ jobs:
 
       - name: Push refreshed outputs/ back to R2
         if: always()
-        run: rclone copy ./outputs "r2:${R2_BUCKET}/outputs" --fast-list --transfers 16
+        run: rclone copy ./outputs "r2:${R2_BUCKET}/macro-research/outputs" --fast-list --transfers 16
 
       - name: Stage this run's new/changed outputs for artifact
         if: always()
