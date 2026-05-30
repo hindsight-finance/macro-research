@@ -32,6 +32,7 @@ on:
           - macro_vwap_barrier_context
           - macro_tick_range_context
           - macro_fvg_study
+          - macro_1550_vwap_retouch
           - macro_range_forecast
           - trend_build_table
           - trend_run_experiments
@@ -113,6 +114,7 @@ jobs:
             macro_vwap_barrier_context)  cmd="python -m features.macro_vwap_barrier_context" ;;
             macro_tick_range_context)    cmd="python -m features.macro_tick_range_context" ;;
             macro_fvg_study)             cmd="python -m features.macro_fvg_study" ;;
+            macro_1550_vwap_retouch)     cmd="python -m features.macro_1550_vwap_retouch" ;;
             macro_range_forecast)        cmd="python -m features.macro_range_forecast" ;;
             trend_build_table)           cmd="python -m features.trend.modeling.cli build-table" ;;
             trend_run_experiments)       cmd="python -m features.trend.modeling.cli run-experiments" ;;
