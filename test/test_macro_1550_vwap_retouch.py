@@ -193,3 +193,37 @@ def test_exact_tie_same_ts_and_rank_is_stable():
     day = _day(FIRST10 + [(15, 102.0, 1, 0), (15, 102.0, 1, 0), (30, 104.0, 1)])
     r = m.detect_retouch_events(day, date=dt.date(2024, 3, 7))
     assert r["break_side"] == "high" and r["break_price"] == 102.0
+
+
+def test_build_and_summarize_end_to_end(tmp_path):
+    # One bullish high-break day with a frozen+rolling retouch, written as a tick parquet.
+    base = dt.datetime(2024, 3, 7, 20, 50, 0, tzinfo=UTC)
+    offsets = [(0, 100.0, 1), (1, 101.0, 1), (2, 99.0, 1), (15, 102.0, 1), (20, 100.0, 1), (30, 105.0, 1)]
+    ticks = [(base + dt.timedelta(seconds=o), i, int(round(p * 4)), s) for i, (o, p, s) in enumerate(offsets)]
+    path = tmp_path / "ticks.parquet"
+    _write_tick_fixture(path, ticks)
+
+    df = m.build_macro_1550_vwap_retouch(path)
+    assert df.height == 1
+    assert df.columns == m.MACRO_1550_VWAP_RETOUCH_COLUMNS
+    assert df["break_side"][0] == "high" and df["bias"][0] == "bullish"
+    assert df["retouch_frozen_occurred"][0] is True
+
+    summary = m.summarize_macro_1550_vwap_retouch(df)
+    assert set(summary.columns) == set(m.SUMMARY_COLUMNS)
+    # the triggered-coverage row reports 1 of 1 days triggered
+    cov = summary.filter((pl.col("scope") == "coverage") & (pl.col("bucket") == "triggered"))
+    assert cov.height == 1 and cov["value"][0] == 100.0 and cov["sample_size"][0] == 1
+
+
+def test_write_outputs(tmp_path):
+    base = dt.datetime(2024, 3, 7, 20, 50, 0, tzinfo=UTC)
+    offsets = [(0, 100.0, 1), (1, 101.0, 1), (2, 99.0, 1), (15, 102.0, 1), (30, 105.0, 1)]
+    ticks = [(base + dt.timedelta(seconds=o), i, int(round(p * 4)), s) for i, (o, p, s) in enumerate(offsets)]
+    src = tmp_path / "ticks.parquet"
+    _write_tick_fixture(src, ticks)
+    out = tmp_path / "retouch.parquet"
+    summ = tmp_path / "retouch_summary.parquet"
+    a, b = m.write_macro_1550_vwap_retouch(src, out, summ)
+    assert a.exists() and b.exists()
+    assert pl.read_parquet(a).height == 1

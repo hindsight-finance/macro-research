@@ -300,3 +300,143 @@ def detect_retouch_events(
         row["vwap_rolling_at_retouch"] = float(rr_row["rolling_vwap"])
 
     return row
+
+
+def build_macro_1550_vwap_retouch(
+    path: str | Path = INPUT_PATH,
+    *,
+    barrier_seconds: int = DEFAULT_BARRIER_SECONDS,
+    touch: float = TOUCH_THRESHOLD_POINTS,
+) -> pl.DataFrame:
+    win = _scan_macro_window(path).collect(engine="streaming")
+    if win.is_empty():
+        return pl.DataFrame(schema=_schema())
+    rows = []
+    for key, day in win.partition_by("date", as_dict=True, maintain_order=True).items():
+        date = key[0] if isinstance(key, tuple) else key
+        rows.append(detect_retouch_events(day, date=date, barrier_seconds=barrier_seconds, touch=touch))
+    return pl.DataFrame(rows, schema=_schema()).sort("date")
+
+
+SUMMARY_COLUMNS = ["scope", "bucket", "metric", "value", "sample_size"]
+
+
+def _rate_row(scope: str, bucket: str, metric: str, count: int, denom: int) -> dict:
+    return {
+        "scope": scope, "bucket": bucket, "metric": metric,
+        "value": (count / denom * 100.0) if denom else None, "sample_size": denom,
+    }
+
+
+def _dist_rows(scope: str, bucket: str, series: pl.Series) -> list[dict]:
+    s = series.drop_nulls()
+    n = s.len()
+    metrics = ("mean", "median", "p10", "p25", "p75", "p90", "favorable_pct")
+    if n == 0:
+        return [{"scope": scope, "bucket": bucket, "metric": mt, "value": None, "sample_size": 0} for mt in metrics]
+    values = {
+        "mean": float(s.mean()), "median": float(s.median()),
+        "p10": float(s.quantile(0.10)), "p25": float(s.quantile(0.25)),
+        "p75": float(s.quantile(0.75)), "p90": float(s.quantile(0.90)),
+        "favorable_pct": float((s > 0).sum()) / n * 100.0,
+    }
+    return [{"scope": scope, "bucket": bucket, "metric": mt, "value": values[mt], "sample_size": n} for mt in metrics]
+
+
+def _decile_rows(scope: str, df: pl.DataFrame, value_col: str, outcome_col: str) -> list[dict]:
+    sub = df.filter(pl.col(value_col).is_not_null() & pl.col(outcome_col).is_not_null())
+    if sub.height < 10:
+        return []
+    sub = sub.with_columns(
+        (((pl.col(value_col).rank(method="ordinal") - 1) * 10 / sub.height).floor().clip(0, 9).cast(pl.Int64) + 1)
+        .alias("_decile")
+    )
+    rows: list[dict] = []
+    for d in range(1, 11):
+        seg = sub.filter(pl.col("_decile") == d)
+        rows.extend(_dist_rows(scope, str(d), seg[outcome_col]))
+    return rows
+
+
+def summarize_macro_1550_vwap_retouch(df: pl.DataFrame) -> pl.DataFrame:
+    missing = sorted(set(MACRO_1550_VWAP_RETOUCH_COLUMNS) - set(df.columns))
+    if missing:
+        raise ValueError(f"Missing context columns: {missing}")
+    rows: list[dict] = []
+    triggered = df.filter(pl.col("trigger_state") == "triggered")
+
+    # coverage
+    rows.append(_rate_row("coverage", "no_first10", "pct", df.filter(~pl.col("has_first10")).height, df.height))
+    rows.append(_rate_row("coverage", "no_trigger", "pct", df.filter(pl.col("trigger_state") == "no_trigger").height, df.height))
+    rows.append(_rate_row("coverage", "triggered", "pct", triggered.height, df.height))
+    for ref in ("frozen", "rolling"):
+        rows.append(_rate_row("coverage", f"runaway_{ref}", "pct",
+                              triggered.filter(~pl.col(f"retouch_{ref}_occurred")).height, triggered.height))
+
+    # signal validation
+    for side in ("high", "low"):
+        sub = df.filter(pl.col("break_side") == side)
+        n = sub.height
+        rows.append(_rate_row("signal_validation", side, "macro_bullish_pct", sub.filter(pl.col("macro_trend_state") == "bullish").height, n))
+        rows.append(_rate_row("signal_validation", side, "macro_bearish_pct", sub.filter(pl.col("macro_trend_state") == "bearish").height, n))
+        rows.append(_rate_row("signal_validation", side, "candle1550_bullish_pct", sub.filter(pl.col("candle_1550_state") == "bullish").height, n))
+        rows.append(_rate_row("signal_validation", side, "candle1550_bearish_pct", sub.filter(pl.col("candle_1550_state") == "bearish").height, n))
+    for col in ("bias_matches_1550_candle", "bias_matches_macro"):
+        sub = triggered.filter(pl.col(col).is_not_null())
+        rows.append(_rate_row("signal_validation", "triggered", col, sub.filter(pl.col(col)).height, sub.height))
+
+    # retouch frequency + lag
+    for ref in ("frozen", "rolling"):
+        occ = triggered.filter(pl.col(f"retouch_{ref}_occurred"))
+        rows.append(_rate_row("retouch_frequency", ref, "retouch_pct", occ.height, triggered.height))
+        rows.extend(_dist_rows("retouch_lag", ref, occ[f"retouch_{ref}_lag_s"].cast(pl.Float64)))
+
+    # forward outcome + excursion by bias x anchor x horizon
+    for bias in ("bullish", "bearish"):
+        b = df.filter(pl.col("bias") == bias)
+        anchors = [
+            ("break", b),
+            ("retouch_frozen", b.filter(pl.col("retouch_frozen_occurred") == True)),  # noqa: E712
+            ("retouch_rolling", b.filter(pl.col("retouch_rolling_occurred") == True)),  # noqa: E712
+        ]
+        for anchor, base in anchors:
+            for horizon in ("1554", "1559", "1600"):
+                rows.extend(_dist_rows(f"forward_outcome:{bias}:{anchor}", horizon, base[f"fwd_{anchor}_{horizon}_points"]))
+            rows.extend(_dist_rows(f"excursion:{bias}:{anchor}", "mfe", base[f"mfe_{anchor}_points"]))
+            rows.extend(_dist_rows(f"excursion:{bias}:{anchor}", "mae", base[f"mae_{anchor}_points"]))
+
+    # decile cross-tabs on the frozen-retouch macro-close outcome
+    frozen = triggered.filter(pl.col("retouch_frozen_occurred") == True)  # noqa: E712
+    for value_col in ("retouch_frozen_lag_s", "range_10s_points", "vol_share_first10"):
+        rows.extend(_decile_rows(f"decile:{value_col}", frozen, value_col, "fwd_retouch_frozen_1559_points"))
+
+    return pl.DataFrame(rows, schema={"scope": pl.String, "bucket": pl.String, "metric": pl.String, "value": pl.Float64, "sample_size": pl.Int64})
+
+
+def write_macro_1550_vwap_retouch(
+    input_path: str | Path = INPUT_PATH,
+    output_path: str | Path = OUTPUT_PATH,
+    summary_output_path: str | Path = SUMMARY_OUTPUT_PATH,
+) -> tuple[Path, Path]:
+    df = build_macro_1550_vwap_retouch(input_path)
+    summary = summarize_macro_1550_vwap_retouch(df)
+    output = Path(output_path)
+    summary_output = Path(summary_output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    summary_output.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(output)
+    summary.write_parquet(summary_output)
+    return output, summary_output
+
+
+def main() -> None:
+    if not data_sources.source_exists(INPUT_PATH):
+        print(f"[ERROR] Input not found: {INPUT_PATH}", file=sys.stderr)
+        sys.exit(1)
+    output, summary = write_macro_1550_vwap_retouch()
+    print(f"[OK] Wrote macro 15:50 VWAP retouch -> {output}")
+    print(f"[OK] Wrote macro 15:50 VWAP retouch summary -> {summary}")
+
+
+if __name__ == "__main__":
+    main()
