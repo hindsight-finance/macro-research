@@ -10,8 +10,8 @@ only the parquet row groups a time-window filter touches via HTTP range requests
 - **Runner.** A public-repo `ubuntu-latest` runner is 4 vCPU / 16 GB RAM, unlimited minutes.
 - **Memory / transfer.** The tick files are time-sorted, so a macro-window read touches a
   handful of row groups. Validated over R2: one day's 15:50–16:00 window across the 6
-  year-sharded files = 17.7k rows in ~11 s; the full `macro_extreme_timing` study (all dates)
-  ran in ~156 s — neither downloads the files.
+  year-sharded files = 17.7k rows in ~11 s; the full `macro_extreme_timing` study (every date,
+  all 6 files, 2020-09 → 2025-11) ran in ~480 s — neither downloads the files.
 - **Cost.** R2 has zero egress and a generous free tier; a run issues at most tens of
   thousands of range reads.
 
@@ -88,9 +88,9 @@ print('rows:', df.height)"   # ~17.7k, a few MB transferred (not the full files)
 - **Year glob.** `TICK_DATA_URL` is a glob (`NQ/tick/*_merged_nq.parquet`); new yearly files
   are picked up automatically. `MINUTE_NQ_URL` is also a glob (`NQ/NQ-*.ohlcv-1m.parquet`) —
   it assumes exactly one NQ ohlcv-1m object exists (replace, don't accumulate, on refresh).
-- **History.** The lake tick files span 2020–2025, but macro-window studies currently surface
-  data from 2022-07 onward (the earlier years lack full key-minute coverage for the close
-  window). Verify upstream coverage if you need 2020–2021.
+- **History.** The lake tick files span 2020–2025 and studies surface that full range
+  (validated: `macro_extreme_timing` produced detail rows 2020-09-01 → 2025-11-26) — longer
+  than the ~2022-07-onward local dataset.
 - **ns-precision filters.** `ts_event` is `datetime[ns, UTC]`; `utils/tick_data._dt` casts
   bounds to ns so row-group pruning stays enabled over R2 (polars #25731).
 - **xgboost device.** `macro_range_forecast` defaults to `--xgb-device cuda`; pass `cpu`.
